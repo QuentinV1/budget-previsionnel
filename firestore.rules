@@ -1,0 +1,373 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file assumes the following data structures:
+//
+// Collection: users
+// Document ID: {uid} (Firebase Auth UID)
+// Fields:
+//   - displayName: string (required, 1..100 chars)
+//   - email: string (required, 0..320 chars, valid email or empty string)
+//   - updatedAt: string (required, ISO 8601 date string, <= 64 chars)
+//
+// Subcollection: users/{uid}/keyVault
+// Document ID: {householdId}
+// Fields:
+//   - wrappedKey: string (required, 16..512 chars, base64url AES-GCM blob)
+//   - iv: string (required, 8..64 chars, base64url)
+//   - salt: string (required, 8..64 chars, base64url)
+//   - mode: string (required, 'passphrase')
+//   - updatedAt: string (required, ISO 8601 date string, <= 64 chars)
+//
+// Collection: households
+// Document ID: {householdId}
+// Fields:
+//   - name: string (required, 1..80 chars)
+//   - ownerId: string (required, immutable, 1..128 chars)
+//   - memberIds: list of strings (required, 1..20 items, must contain ownerId)
+//   - members: map keyed by uid -> { uid, displayName, email, role ('owner'|'member'), joinedAt }
+//   - encryptedPayload: map { iv, ciphertext, version, updatedAt?, updatedBy? }
+//   - lastInviteId: string (optional, 1..128 chars, used during invite redemption)
+//   - createdAt: string (required, immutable, ISO 8601 date string)
+//   - updatedAt: string (required, ISO 8601 date string)
+//
+// Collection: invites
+// Document ID: {inviteId}
+// Fields:
+//   - householdId: string (required, immutable, 1..128 chars)
+//   - householdName: string (required, 1..80 chars)
+//   - createdBy: string (required, immutable, 1..128 chars)
+//   - wrappedHdk: string (required, immutable, 16..512 chars)
+//   - iv: string (required, immutable, 8..64 chars)
+//   - salt: string (required, immutable, 8..64 chars)
+//   - revoked: bool (required)
+//   - maxUses: int (required, 1..20)
+//   - usedCount: int (required, 0..maxUses)
+//   - usedBy: list of strings (required, 0..20 items)
+//   - createdAt: string (required, immutable, ISO 8601 date string)
+//   - expiresAt: timestamp (required)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == resource.data.uid;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+        email.size() <= 320 &&
+        email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string &&
+        dateStr.size() <= 64 &&
+        dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+        (request.resource.data[field] is string &&
+         request.resource.data[field].size() >= minLen &&
+         request.resource.data[field].size() <= maxLen);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['displayName', 'email', 'updatedAt']) &&
+        data.keys().hasOnly(['displayName', 'email', 'updatedAt']) &&
+        data.displayName is string &&
+        data.displayName.size() >= 1 &&
+        data.displayName.size() <= 100 &&
+        data.email is string &&
+        data.email.size() <= 320 &&
+        (data.email == '' || isValidEmail(data.email)) &&
+        isValidDateString(data.updatedAt);
+    }
+
+    function isValidKeyVault(data) {
+      return data.keys().hasAll(['wrappedKey', 'iv', 'salt', 'mode', 'updatedAt']) &&
+        data.keys().hasOnly(['wrappedKey', 'iv', 'salt', 'mode', 'updatedAt']) &&
+        data.wrappedKey is string &&
+        data.wrappedKey.size() >= 16 &&
+        data.wrappedKey.size() <= 512 &&
+        data.iv is string &&
+        data.iv.size() >= 8 &&
+        data.iv.size() <= 64 &&
+        data.salt is string &&
+        data.salt.size() >= 8 &&
+        data.salt.size() <= 64 &&
+        data.mode is string &&
+        data.mode in ['passphrase'] &&
+        isValidDateString(data.updatedAt);
+    }
+
+    function isValidEncryptedPayload(payload) {
+      return payload is map &&
+        payload.keys().hasAll(['iv', 'ciphertext', 'version']) &&
+        payload.keys().hasOnly(['iv', 'ciphertext', 'version', 'updatedAt', 'updatedBy']) &&
+        payload.iv is string &&
+        payload.iv.size() >= 8 &&
+        payload.iv.size() <= 64 &&
+        payload.ciphertext is string &&
+        payload.ciphertext.size() >= 1 &&
+        payload.ciphertext.size() <= 800000 &&
+        payload.version is int &&
+        payload.version >= 1 &&
+        payload.version <= 100 &&
+        (!('updatedAt' in payload) || isValidDateString(payload.updatedAt)) &&
+        (!('updatedBy' in payload) ||
+          (payload.updatedBy is string &&
+           payload.updatedBy.size() >= 1 &&
+           payload.updatedBy.size() <= 128));
+    }
+
+    function isValidHouseholdMember(member, expectedUid, expectedRole) {
+      return member is map &&
+        member.keys().hasAll(['uid', 'displayName', 'email', 'role', 'joinedAt']) &&
+        member.keys().hasOnly(['uid', 'displayName', 'email', 'role', 'joinedAt']) &&
+        member.uid is string &&
+        member.uid == expectedUid &&
+        member.displayName is string &&
+        member.displayName.size() >= 1 &&
+        member.displayName.size() <= 100 &&
+        member.email is string &&
+        member.email.size() <= 320 &&
+        (member.email == '' || isValidEmail(member.email)) &&
+        member.role is string &&
+        member.role == expectedRole &&
+        isValidDateString(member.joinedAt);
+    }
+
+    function isValidHousehold(data) {
+      return data.keys().hasAll(['name', 'ownerId', 'memberIds', 'members', 'encryptedPayload', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['name', 'ownerId', 'memberIds', 'members', 'encryptedPayload', 'lastInviteId', 'createdAt', 'updatedAt']) &&
+        data.name is string &&
+        data.name.size() >= 1 &&
+        data.name.size() <= 80 &&
+        data.ownerId is string &&
+        data.ownerId.size() >= 1 &&
+        data.ownerId.size() <= 128 &&
+        data.memberIds is list &&
+        data.memberIds.size() >= 1 &&
+        data.memberIds.size() <= 20 &&
+        data.ownerId in data.memberIds &&
+        data.members is map &&
+        data.members.size() >= 1 &&
+        data.members.size() <= 20 &&
+        data.ownerId in data.members &&
+        isValidEncryptedPayload(data.encryptedPayload) &&
+        isValidOptionalString('lastInviteId', 1, 128) &&
+        isValidDateString(data.createdAt) &&
+        isValidDateString(data.updatedAt);
+    }
+
+    function isValidHouseholdMemberUpdate() {
+      let membershipChanged = request.resource.data.diff(resource.data).affectedKeys().hasAny(['memberIds', 'members']);
+      let isHouseholdOwner = request.auth.uid == resource.data.ownerId;
+      let ownerRemains = resource.data.ownerId in request.resource.data.memberIds &&
+        resource.data.ownerId in request.resource.data.members;
+      let ownerRemovingMembers = isHouseholdOwner &&
+        ownerRemains &&
+        resource.data.memberIds.hasAll(request.resource.data.memberIds) &&
+        request.resource.data.members.diff(resource.data.members).addedKeys().size() == 0 &&
+        request.resource.data.members.diff(resource.data.members).changedKeys().size() == 0;
+      let memberLeavingSelf = !isHouseholdOwner &&
+        !(request.auth.uid in request.resource.data.memberIds) &&
+        request.resource.data.memberIds.size() == resource.data.memberIds.size() - 1 &&
+        resource.data.memberIds.hasAll(request.resource.data.memberIds) &&
+        request.resource.data.members.diff(resource.data.members).affectedKeys().hasOnly([request.auth.uid]) &&
+        !(request.auth.uid in request.resource.data.members) &&
+        areImmutableFieldsUnchanged(['name', 'encryptedPayload']);
+
+      return request.auth.uid in resource.data.memberIds &&
+        areImmutableFieldsUnchanged(['ownerId', 'createdAt']) &&
+        (!membershipChanged || ownerRemovingMembers || memberLeavingSelf);
+    }
+
+    function isValidHouseholdInviteJoin(householdId) {
+      let inviteId = request.resource.data.lastInviteId;
+      let inv = get(/databases/$(database)/documents/invites/$(inviteId));
+      let invAfter = getAfter(/databases/$(database)/documents/invites/$(inviteId));
+
+      return !(request.auth.uid in resource.data.memberIds) &&
+        'lastInviteId' in request.resource.data &&
+        request.resource.data.lastInviteId is string &&
+        request.resource.data.lastInviteId.size() >= 1 &&
+        request.resource.data.lastInviteId.size() <= 128 &&
+        exists(/databases/$(database)/documents/invites/$(inviteId)) &&
+        inv.data.householdId == householdId &&
+        inv.data.revoked == false &&
+        inv.data.expiresAt > request.time &&
+        inv.data.usedCount < inv.data.maxUses &&
+        !(request.auth.uid in inv.data.usedBy) &&
+        invAfter.data.usedCount == inv.data.usedCount + 1 &&
+        request.auth.uid in invAfter.data.usedBy &&
+        areImmutableFieldsUnchanged(['ownerId', 'name', 'encryptedPayload', 'createdAt']) &&
+        request.resource.data.memberIds.size() == resource.data.memberIds.size() + 1 &&
+        request.resource.data.memberIds.hasAll(resource.data.memberIds) &&
+        request.auth.uid in request.resource.data.memberIds &&
+        request.resource.data.memberIds.size() <= 20 &&
+        request.resource.data.members.diff(resource.data.members).affectedKeys().hasOnly([request.auth.uid]) &&
+        !(request.auth.uid in resource.data.members) &&
+        request.auth.uid in request.resource.data.members &&
+        isValidHouseholdMember(request.resource.data.members[request.auth.uid], request.auth.uid, 'member');
+    }
+
+    function isValidInvite(data) {
+      return data.keys().hasAll(['householdId', 'householdName', 'createdBy', 'wrappedHdk', 'iv', 'salt', 'revoked', 'maxUses', 'usedCount', 'usedBy', 'createdAt', 'expiresAt']) &&
+        data.keys().hasOnly(['householdId', 'householdName', 'createdBy', 'wrappedHdk', 'iv', 'salt', 'revoked', 'maxUses', 'usedCount', 'usedBy', 'createdAt', 'expiresAt']) &&
+        data.householdId is string &&
+        data.householdId.size() >= 1 &&
+        data.householdId.size() <= 128 &&
+        data.householdName is string &&
+        data.householdName.size() >= 1 &&
+        data.householdName.size() <= 80 &&
+        data.createdBy is string &&
+        data.createdBy.size() >= 1 &&
+        data.createdBy.size() <= 128 &&
+        data.wrappedHdk is string &&
+        data.wrappedHdk.size() >= 16 &&
+        data.wrappedHdk.size() <= 512 &&
+        data.iv is string &&
+        data.iv.size() >= 8 &&
+        data.iv.size() <= 64 &&
+        data.salt is string &&
+        data.salt.size() >= 8 &&
+        data.salt.size() <= 64 &&
+        data.revoked is bool &&
+        data.maxUses is int &&
+        data.maxUses >= 1 &&
+        data.maxUses <= 20 &&
+        data.usedCount is int &&
+        data.usedCount >= 0 &&
+        data.usedCount <= data.maxUses &&
+        data.usedBy is list &&
+        data.usedBy.size() <= 20 &&
+        isValidDateString(data.createdAt) &&
+        data.expiresAt is timestamp;
+    }
+
+    function isValidInviteAdminUpdate() {
+      return (resource.data.createdBy == request.auth.uid ||
+          get(/databases/$(database)/documents/households/$(resource.data.householdId)).data.ownerId == request.auth.uid) &&
+        areImmutableFieldsUnchanged(['householdId', 'wrappedHdk', 'iv', 'salt', 'createdBy', 'createdAt']);
+    }
+
+    function isValidInviteRedeemUpdate() {
+      return resource.data.revoked == false &&
+        request.time < resource.data.expiresAt &&
+        resource.data.usedCount < resource.data.maxUses &&
+        !(request.auth.uid in resource.data.usedBy) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedCount', 'usedBy']) &&
+        request.resource.data.usedCount == resource.data.usedCount + 1 &&
+        request.resource.data.usedBy.size() == resource.data.usedBy.size() + 1 &&
+        request.resource.data.usedBy.hasAll(resource.data.usedBy) &&
+        request.auth.uid in request.resource.data.usedBy;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // Private user profile and E2EE passphrase key vault
+    match /users/{uid} {
+      allow get: if isOwner(uid);
+      allow list: if false;
+      allow create: if isOwner(uid) && uidUnchanged() && isValidUser(request.resource.data);
+      allow update: if isOwner(uid) && uidNotModified() && isValidUser(request.resource.data);
+      allow delete: if isOwner(uid);
+
+      match /keyVault/{householdId} {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid) && isValidKeyVault(request.resource.data);
+        allow delete: if isOwner(uid);
+      }
+    }
+
+    // E2EE household documents
+    match /households/{householdId} {
+      allow get, list: if isAuthenticated() && request.auth.uid in resource.data.memberIds;
+
+      allow create: if isAuthenticated() &&
+        isValidHousehold(request.resource.data) &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.memberIds.size() == 1 &&
+        request.auth.uid in request.resource.data.memberIds &&
+        request.resource.data.members.size() == 1 &&
+        isValidHouseholdMember(request.resource.data.members[request.auth.uid], request.auth.uid, 'owner');
+
+      allow update: if isAuthenticated() &&
+        isValidHousehold(request.resource.data) &&
+        (isValidHouseholdMemberUpdate() || isValidHouseholdInviteJoin(householdId));
+
+      allow delete: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+    }
+
+    // Household invitations (get only, list denied to prevent enumeration)
+    match /invites/{inviteId} {
+      allow get: if isAuthenticated();
+      allow list: if false;
+
+      allow create: if isAuthenticated() &&
+        isValidInvite(request.resource.data) &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.auth.uid in get(/databases/$(database)/documents/households/$(request.resource.data.householdId)).data.memberIds &&
+        request.resource.data.revoked == false &&
+        request.resource.data.usedCount == 0 &&
+        request.resource.data.usedBy.size() == 0;
+
+      allow update: if isAuthenticated() &&
+        isValidInvite(request.resource.data) &&
+        (isValidInviteAdminUpdate() || isValidInviteRedeemUpdate());
+
+      allow delete: if isAuthenticated() &&
+        (resource.data.createdBy == request.auth.uid ||
+         get(/databases/$(database)/documents/households/$(resource.data.householdId)).data.ownerId == request.auth.uid);
+    }
+
+    // Default deny all other paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
