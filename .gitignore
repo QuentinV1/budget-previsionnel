@@ -10,3 +10,5 @@ Thumbs.db
 budget-donnees-actuelles.json
 budget-foyer-*.json
 *.backup.json
+firebase-debug.log
+firestore-debug.log

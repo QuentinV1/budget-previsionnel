@@ -18,7 +18,8 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { db } from '../firebase';
+import { createDefaultState } from '../data/defaultData';
+import { cleanForFirestore, db } from '../firebase';
 import { BudgetState } from '../types';
 import {
   EncryptedPayload,
@@ -66,7 +67,8 @@ function requireDb() {
 }
 
 function userLabel(user: User): string {
-  return user.displayName?.trim() || user.email?.split('@')[0] || 'Membre';
+  const raw = user.displayName?.trim() || user.email?.split('@')[0] || 'Membre';
+  return raw.slice(0, 80) || 'Membre';
 }
 
 export async function upsertUserProfile(user: User): Promise<void> {
@@ -76,14 +78,14 @@ export async function upsertUserProfile(user: User): Promise<void> {
   if (!snap.exists()) {
     await setDoc(ref, {
       uid: user.uid,
-      email: user.email ?? '',
+      email: (user.email ?? '').slice(0, 120),
       displayName: userLabel(user),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
   } else {
     await updateDoc(ref, {
-      email: user.email ?? '',
+      email: (user.email ?? '').slice(0, 120),
       displayName: userLabel(user),
       updatedAt: serverTimestamp(),
     });
@@ -102,23 +104,131 @@ export async function listUserHouseholds(uid: string): Promise<HouseholdDoc[]> {
   return list;
 }
 
+export function subscribeUserHouseholds(
+  uid: string,
+  onUpdate: (list: HouseholdDoc[], fromCache: boolean) => void,
+  onError: (err: unknown) => void
+): () => void {
+  const firestore = requireDb();
+  const q = query(collection(firestore, 'households'), where('memberIds', 'array-contains', uid));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list: HouseholdDoc[] = [];
+      snap.forEach((d) => {
+        list.push({ id: d.id, ...(d.data() as Omit<HouseholdDoc, 'id'>) });
+      });
+      list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+      onUpdate(list, snap.metadata.fromCache);
+    },
+    (err) => onError(err)
+  );
+}
+
 export function subscribeHousehold(
   householdId: string,
-  onData: (docData: HouseholdDoc | null) => void,
-  onError: (err: Error) => void
+  onData: (docData: HouseholdDoc | null, fromCache: boolean) => void,
+  onError: (err: unknown) => void
 ): () => void {
   const firestore = requireDb();
   return onSnapshot(
     doc(firestore, 'households', householdId),
     (snap) => {
       if (!snap.exists()) {
-        onData(null);
+        onData(null, snap.metadata.fromCache);
         return;
       }
-      onData({ id: snap.id, ...(snap.data() as Omit<HouseholdDoc, 'id'>) });
+      onData({ id: snap.id, ...(snap.data() as Omit<HouseholdDoc, 'id'>) }, snap.metadata.fromCache);
     },
     (err) => onError(err)
   );
+}
+
+const DEFAULT_DEMO_STATE = createDefaultState();
+const DEFAULT_DEMO_IDS = new Set<string>([
+  ...DEFAULT_DEMO_STATE.sheets.map((s) => String(s.id)),
+  ...DEFAULT_DEMO_STATE.lines.map((l) => String(l.id)),
+  ...DEFAULT_DEMO_STATE.categories.map((c) => String(c.id)),
+  ...DEFAULT_DEMO_STATE.accounts.map((a) => String(a.id)),
+  ...DEFAULT_DEMO_STATE.goals.map((g) => String(g.id)),
+  ...DEFAULT_DEMO_STATE.loans.map((l) => String(l.id)),
+  ...DEFAULT_DEMO_STATE.levers.map((l) => String(l.id)),
+]);
+
+/**
+ * Fusionne l'état serveur et les éléments locaux absents du serveur
+ * lors d'une première connexion sur un nouvel appareil/compte (modèle app-charcuterie).
+ */
+export function mergeBudgetStates(
+  serverState: BudgetState,
+  localState: BudgetState
+): { merged: BudgetState; hasLocalAdditions: boolean } {
+  let hasLocalAdditions = false;
+
+  const mergeById = <T extends { id: string }>(serverArr: T[] = [], localArr: T[] = []): T[] => {
+    const serverIds = new Set(serverArr.map((item) => String(item.id)));
+    const localOnly = localArr.filter(
+      (item) =>
+        item &&
+        item.id &&
+        !serverIds.has(String(item.id)) &&
+        !DEFAULT_DEMO_IDS.has(String(item.id))
+    );
+    if (localOnly.length > 0) {
+      hasLocalAdditions = true;
+    }
+    return [...serverArr, ...localOnly];
+  };
+
+  const mergedLines = mergeById(serverState.lines, localState.lines);
+  const mergedCategories = mergeById(serverState.categories, localState.categories);
+  const mergedAccounts = mergeById(serverState.accounts, localState.accounts);
+  const mergedGoals = mergeById(serverState.goals ?? [], localState.goals ?? []);
+  const mergedLoans = mergeById(serverState.loans, localState.loans);
+  const mergedLevers = mergeById(serverState.levers, localState.levers);
+
+  // Inclure les feuilles locales personnalisées ou référencées par des éléments ajoutés
+  const referencedSheetIds = new Set<string>([
+    ...mergedLines.map((l) => l.sheetId),
+    ...mergedAccounts.map((a) => a.ownerId),
+    ...mergedLoans.map((l) => l.ownerId),
+  ]);
+  const serverSheetIds = new Set(serverState.sheets.map((s) => String(s.id)));
+  const localOnlySheets = (localState.sheets || []).filter(
+    (s) =>
+      s &&
+      s.id &&
+      !serverSheetIds.has(String(s.id)) &&
+      (!DEFAULT_DEMO_IDS.has(String(s.id)) || referencedSheetIds.has(String(s.id)))
+  );
+  if (localOnlySheets.length > 0) {
+    hasLocalAdditions = true;
+  }
+  const mergedSheets = [...serverState.sheets, ...localOnlySheets];
+
+  // Suivi mensuel par mois (month = YYYY-MM)
+  const serverMonths = new Set((serverState.monthlyRecords ?? []).map((r) => String(r.month)));
+  const localOnlyRecords = (localState.monthlyRecords ?? []).filter(
+    (r) => r && r.month && !serverMonths.has(String(r.month))
+  );
+  if (localOnlyRecords.length > 0) {
+    hasLocalAdditions = true;
+  }
+  const mergedRecords = [...(serverState.monthlyRecords ?? []), ...localOnlyRecords];
+
+  const merged = normalizeState({
+    ...serverState,
+    sheets: mergedSheets,
+    lines: mergedLines,
+    categories: mergedCategories,
+    accounts: mergedAccounts,
+    goals: mergedGoals,
+    loans: mergedLoans,
+    levers: mergedLevers,
+    monthlyRecords: mergedRecords,
+  });
+
+  return { merged, hasLocalAdditions };
 }
 
 export async function createHousehold(
@@ -126,29 +236,29 @@ export async function createHousehold(
   name: string,
   initialState: BudgetState,
   passphrase?: string
-): Promise<{ householdId: string; hdk: CryptoKey; recoveryKey: string }> {
+): Promise<{ householdId: string; hdk: CryptoKey; recoveryKey: string; doc: HouseholdDoc }> {
   const firestore = requireDb();
   const householdId = generateRandomId('foyer');
   const hdk = await generateHouseholdKey();
   const cleanName = name.trim().slice(0, 80) || 'Mon Foyer';
   const now = new Date().toISOString();
 
-  const stateToEncrypt: BudgetState = {
+  const stateToEncrypt: BudgetState = cleanForFirestore({
     ...initialState,
     householdName: cleanName,
     updatedAt: now,
-  };
+  });
   const encryptedPayload = await encryptPayload(stateToEncrypt, hdk);
 
   const member: HouseholdMember = {
     uid: user.uid,
     displayName: userLabel(user),
-    email: user.email ?? '',
+    email: (user.email ?? '').slice(0, 320),
     role: 'owner',
     joinedAt: now,
   };
 
-  await setDoc(doc(firestore, 'households', householdId), {
+  const payloadDoc: Omit<HouseholdDoc, 'id'> = {
     name: cleanName,
     ownerId: user.uid,
     memberIds: [user.uid],
@@ -156,7 +266,9 @@ export async function createHousehold(
     encryptedPayload,
     createdAt: now,
     updatedAt: now,
-  });
+  };
+
+  await setDoc(doc(firestore, 'households', householdId), cleanForFirestore(payloadDoc));
 
   await saveCachedHouseholdKey(user.uid, householdId, hdk);
   if (passphrase && passphrase.trim().length >= 6) {
@@ -164,7 +276,12 @@ export async function createHousehold(
   }
 
   const recoveryKey = await exportKeyBase64Url(hdk);
-  return { householdId, hdk, recoveryKey };
+  return {
+    householdId,
+    hdk,
+    recoveryKey,
+    doc: { id: householdId, ...payloadDoc },
+  };
 }
 
 export async function saveHouseholdBudget(
@@ -172,15 +289,17 @@ export async function saveHouseholdBudget(
   uid: string,
   state: BudgetState,
   hdk: CryptoKey
-): Promise<void> {
+): Promise<EncryptedPayload> {
   const firestore = requireDb();
   const now = new Date().toISOString();
-  const encryptedPayload = await encryptPayload({ ...state, updatedAt: now }, hdk);
+  const cleanState = cleanForFirestore({ ...state, updatedAt: now });
+  const encryptedPayload = await encryptPayload(cleanState, hdk);
   await updateDoc(doc(firestore, 'households', householdId), {
     name: state.householdName.trim().slice(0, 80) || 'Mon Foyer',
     encryptedPayload: { ...encryptedPayload, updatedAt: now, updatedBy: uid },
     updatedAt: now,
   });
+  return encryptedPayload;
 }
 
 export async function decryptHouseholdState(
@@ -199,11 +318,14 @@ export async function savePassphraseVault(
 ): Promise<void> {
   const firestore = requireDb();
   const wrapped = await wrapHouseholdKey(hdk, passphrase);
-  await setDoc(doc(firestore, 'users', uid, 'keyVault', householdId), {
-    ...wrapped,
-    mode: 'passphrase',
-    updatedAt: new Date().toISOString(),
-  });
+  await setDoc(
+    doc(firestore, 'users', uid, 'keyVault', householdId),
+    cleanForFirestore({
+      ...wrapped,
+      mode: 'passphrase',
+      updatedAt: new Date().toISOString(),
+    })
+  );
 }
 
 export async function hasPassphraseVault(uid: string, householdId: string): Promise<boolean> {
@@ -245,7 +367,7 @@ export async function createHouseholdInvite(
 
   await setDoc(doc(firestore, 'invites', inviteId), {
     householdId,
-    householdName,
+    householdName: householdName.trim().slice(0, 80) || 'Mon Foyer',
     createdBy: user.uid,
     wrappedHdk: wrapped.wrappedKey,
     iv: wrapped.iv,
@@ -309,7 +431,7 @@ export async function redeemHouseholdInvite(
     const member: HouseholdMember = {
       uid: user.uid,
       displayName: userLabel(user),
-      email: user.email ?? '',
+      email: (user.email ?? '').slice(0, 320),
       role: 'member',
       joinedAt: now,
     };

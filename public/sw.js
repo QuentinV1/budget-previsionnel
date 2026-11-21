@@ -1,4 +1,4 @@
-const CACHE_NAME = 'budget-foyer-v1';
+const CACHE_NAME = 'budget-foyer-v2';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultState } from '../../data/defaultData';
+import { cleanForFirestore, formatSyncError } from '../../firebase';
+import { mergeBudgetStates } from '../../services/householdService';
 import { BudgetLine } from '../../types';
 import { parseBankCsv } from '../bankCsv';
 import { computeByCategory, computeByTag, computeHousehold, computeMonthlyMap } from '../calc';
@@ -172,5 +174,36 @@ describe('storage & bankCsv utilities', () => {
     expect(txs[0]).toMatchObject({ date: '2026-11-05', type: 'expense', amount: 13.49, categoryId: 'loisirs' });
     expect(txs[1]).toMatchObject({ date: '2026-11-06', type: 'expense', amount: 82.3, categoryId: 'alimentation' });
     expect(txs[2]).toMatchObject({ date: '2026-11-01', type: 'income', amount: 3120 });
+  });
+
+  it('merges local non-demo items into server state on new device login and formats sync errors', () => {
+    const serverState = createDefaultState();
+    const localState = createDefaultState();
+    localState.lines.push({
+      id: 'custom-line-99',
+      sheetId: 'commun',
+      section: 'expense',
+      group: 'courant',
+      label: 'Dépense locale ajoutée hors-ligne',
+      comment: '',
+      mode: 'monthly',
+      amount: 75,
+      annualAmount: 0,
+      share: 100,
+      percent: 100,
+      refLineIds: [],
+      categoryId: 'autres',
+    });
+
+    const { merged, hasLocalAdditions } = mergeBudgetStates(serverState, localState);
+    expect(hasLocalAdditions).toBe(true);
+    expect(merged.lines.some((l) => l.id === 'custom-line-99')).toBe(true);
+
+    const cleaned = cleanForFirestore({ a: 1, b: undefined });
+    expect(cleaned).toEqual({ a: 1, b: null });
+
+    expect(formatSyncError({ code: 'permission-denied' })).toBe(
+      'Accès Firestore refusé (vérifiez que votre e-mail est bien vérifié et autorisé).'
+    );
   });
 });

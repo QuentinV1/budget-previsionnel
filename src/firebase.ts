@@ -1,5 +1,17 @@
 import { FirebaseApp, getApps, initializeApp } from 'firebase/app';
-import { Auth, GoogleAuthProvider, getAuth } from 'firebase/auth';
+import {
+  Auth,
+  GoogleAuthProvider,
+  User,
+  createUserWithEmailAndPassword,
+  getAuth,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  updateProfile,
+} from 'firebase/auth';
 import {
   Firestore,
   initializeFirestore,
@@ -7,7 +19,7 @@ import {
   persistentMultipleTabManager,
 } from 'firebase/firestore';
 
-const firebaseConfig = {
+export const FIREBASE_CONFIG = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyCuYM0tMpd1f1jDYz27OhCaPpcAWhI3i48',
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'quentin-apps-hub.firebaseapp.com',
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'quentin-apps-hub',
@@ -18,11 +30,14 @@ const firebaseConfig = {
 };
 
 export function isFirebaseConfigured(): boolean {
+  if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
+    return false;
+  }
   return Boolean(
-    firebaseConfig.apiKey &&
-      firebaseConfig.authDomain &&
-      firebaseConfig.projectId &&
-      firebaseConfig.appId
+    FIREBASE_CONFIG.apiKey &&
+      FIREBASE_CONFIG.authDomain &&
+      FIREBASE_CONFIG.projectId &&
+      FIREBASE_CONFIG.appId
   );
 }
 
@@ -32,13 +47,89 @@ let db: Firestore | null = null;
 let googleProvider: GoogleAuthProvider | null = null;
 
 if (isFirebaseConfigured()) {
-  app = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = initializeFirestore(app, {
-    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
-  });
-  googleProvider = new GoogleAuthProvider();
-  googleProvider.setCustomParameters({ prompt: 'select_account' });
+  try {
+    app = getApps().length > 0 ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
+    auth = getAuth(app);
+    db = initializeFirestore(app, {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+      ignoreUndefinedProperties: true,
+    });
+    googleProvider = new GoogleAuthProvider();
+    googleProvider.setCustomParameters({ prompt: 'select_account' });
+  } catch (err) {
+    console.warn('Firebase SDK indisponible (mode hors-ligne local):', err);
+    app = null;
+    auth = null;
+    db = null;
+    googleProvider = null;
+  }
+}
+
+export function cleanForFirestore<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj, (_k, v) => (v === undefined ? null : v))) as T;
+}
+
+export function formatSyncError(err: unknown): string {
+  const code = (err as { code?: string })?.code;
+  const msg = (err as { message?: string })?.message || '';
+  if (
+    code === 'permission-denied' ||
+    msg.includes('permission-denied') ||
+    msg.includes('Missing or insufficient permissions') ||
+    msg.includes('PERMISSION_DENIED')
+  ) {
+    return 'Accès Firestore refusé (vérifiez que votre e-mail est bien vérifié et autorisé).';
+  }
+  return msg || 'Erreur de synchronisation Firestore';
+}
+
+export async function connexionEmail(email: string, password: string): Promise<User> {
+  if (!auth) throw new Error('Firebase indisponible hors-ligne.');
+  const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+  return cred.user;
+}
+
+export async function inscriptionEmail(
+  email: string,
+  password: string,
+  displayName?: string
+): Promise<User> {
+  if (!auth) throw new Error('Firebase indisponible hors-ligne.');
+  const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+  if (displayName && displayName.trim()) {
+    await updateProfile(cred.user, { displayName: displayName.trim() }).catch(() => {});
+  }
+  await sendEmailVerification(cred.user).catch(() => {});
+  return cred.user;
+}
+
+export async function connexionGoogle(): Promise<User> {
+  if (!auth || !googleProvider) throw new Error('Firebase indisponible hors-ligne.');
+  const cred = await signInWithPopup(auth, googleProvider);
+  return cred.user;
+}
+
+export async function renvoyerEmailVerification(): Promise<boolean> {
+  if (!auth || !auth.currentUser) throw new Error('Aucun utilisateur connecté.');
+  if (auth.currentUser.emailVerified) return false;
+  await sendEmailVerification(auth.currentUser);
+  return true;
+}
+
+export async function rechargerUtilisateurFirebase(): Promise<User | null> {
+  if (!auth || !auth.currentUser) return null;
+  await auth.currentUser.reload();
+  return auth.currentUser;
+}
+
+export async function reinitialiserMotDePasse(email: string): Promise<void> {
+  if (!auth) throw new Error('Firebase indisponible hors-ligne.');
+  await sendPasswordResetEmail(auth, email.trim());
+}
+
+export async function deconnexionFirebase(): Promise<void> {
+  if (!auth) return;
+  await signOut(auth);
 }
 
 export { app, auth, db, googleProvider };

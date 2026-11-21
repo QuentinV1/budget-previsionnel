@@ -6,13 +6,13 @@ import {
   Copy,
   KeyRound,
   Lock,
-  LogOut,
   Plus,
   ShieldCheck,
   UserPlus,
   Users,
 } from 'lucide-react';
 import { createDefaultState } from '../data/defaultData';
+import { formatSyncError } from '../firebase';
 import {
   HouseholdDoc,
   createHousehold,
@@ -22,26 +22,29 @@ import {
 } from '../services/householdService';
 import { importKeyBase64Url } from '../utils/crypto';
 import { saveCachedHouseholdKey } from '../utils/keyCache';
-import { clearLocalState, hasLocalState, loadState } from '../utils/storage';
+import { hasLocalState, loadState } from '../utils/storage';
+import { Modal } from './ui';
 
 interface Props {
+  open: boolean;
+  onClose: () => void;
   user: User;
   households: HouseholdDoc[];
   lockedHousehold: HouseholdDoc | null;
   initialInviteId?: string;
   initialInviteKey?: string;
   onUnlocked: (householdId: string, hdk: CryptoKey) => void;
-  onSignOut: () => void;
 }
 
 export function HouseholdOnboarding({
+  open,
+  onClose,
   user,
   households,
   lockedHousehold,
   initialInviteId = '',
   initialInviteKey = '',
   onUnlocked,
-  onSignOut,
 }: Props) {
   const hasInvite = Boolean(initialInviteId && initialInviteKey);
   const [tab, setTab] = useState<'create' | 'join' | 'unlock'>(
@@ -76,19 +79,22 @@ export function HouseholdOnboarding({
       setInviteId(initialInviteId);
       setInviteSecret(initialInviteKey);
       setTab('join');
+    } else if (lockedHousehold) {
+      setTab('unlock');
+    } else {
+      setTab('create');
     }
-  }, [initialInviteId, initialInviteKey]);
+  }, [initialInviteId, initialInviteKey, lockedHousehold, open]);
 
   useEffect(() => {
-    if (!lockedHousehold) return;
-    setTab('unlock');
+    if (!lockedHousehold || !open) return;
     hasPassphraseVault(user.uid, lockedHousehold.id)
       .then((hasVault) => {
         setVaultAvailable(hasVault);
         setUnlockMode(hasVault ? 'passphrase' : 'recovery');
       })
       .catch(() => setVaultAvailable(false));
-  }, [lockedHousehold, user.uid]);
+  }, [lockedHousehold, user.uid, open]);
 
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
@@ -97,10 +103,9 @@ export function HouseholdOnboarding({
     try {
       const initial = importLocal ? loadState() : createDefaultState();
       const res = await createHousehold(user, foyerName, initial, passphrase || undefined);
-      if (importLocal) clearLocalState();
       setCreatedRecoveryKey(res);
     } catch (err: unknown) {
-      setError((err as Error)?.message || 'Impossible de créer le foyer.');
+      setError(formatSyncError(err));
     } finally {
       setBusy(false);
     }
@@ -114,7 +119,7 @@ export function HouseholdOnboarding({
       const res = await redeemHouseholdInvite(user, inviteId, inviteSecret);
       onUnlocked(res.householdId, res.hdk);
     } catch (err: unknown) {
-      setError((err as Error)?.message || 'Impossible de rejoindre ce foyer.');
+      setError(formatSyncError(err));
     } finally {
       setBusy(false);
     }
@@ -145,14 +150,24 @@ export function HouseholdOnboarding({
     }
   };
 
-  if (createdRecoveryKey) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
-        <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="mb-4 flex items-center gap-3 text-emerald-700">
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={
+        createdRecoveryKey
+          ? 'Foyer créé et chiffré (E2EE)'
+          : lockedHousehold && tab === 'unlock'
+            ? `Déverrouiller « ${lockedHousehold.name} »`
+            : 'Foyer chiffré (Créer / Rejoindre)'
+      }
+    >
+      {createdRecoveryKey ? (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 text-emerald-700">
             <CheckCircle2 className="h-7 w-7 shrink-0" />
             <div>
-              <h2 className="text-base font-bold text-slate-900">Foyer créé et chiffré !</h2>
+              <h2 className="text-sm font-bold text-slate-900">Foyer créé et chiffré !</h2>
               <p className="text-xs text-slate-500">Conservez votre clé de secours en lieu sûr</p>
             </div>
           </div>
@@ -182,36 +197,19 @@ export function HouseholdOnboarding({
 
           <button
             type="button"
-            onClick={() => onUnlocked(createdRecoveryKey.householdId, createdRecoveryKey.hdk)}
-            className="mt-5 w-full rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-slate-800"
+            onClick={() => {
+              const target = createdRecoveryKey;
+              setCreatedRecoveryKey(null);
+              onUnlocked(target.householdId, target.hdk);
+            }}
+            className="w-full rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-slate-800"
           >
-            Accéder à mon budget
+            Accéder à mon budget synchronisé
           </button>
         </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
-      <div className="w-full max-w-md space-y-4">
-        <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs">
-          <div className="min-w-0">
-            <p className="truncate font-semibold text-slate-900">{user.displayName || user.email}</p>
-            <p className="truncate text-[11px] text-slate-500">{user.email}</p>
-          </div>
-          <button
-            type="button"
-            onClick={onSignOut}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
-          >
-            <LogOut className="h-3.5 w-3.5" />
-            Déconnexion
-          </button>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="mb-4 flex gap-1 rounded-xl bg-slate-100 p-1">
+      ) : (
+        <div className="space-y-4">
+          <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
             {lockedHousehold && (
               <button
                 type="button"
@@ -259,7 +257,7 @@ export function HouseholdOnboarding({
                 <h2 className="text-sm font-bold">Déverrouiller « {lockedHousehold.name} »</h2>
               </div>
               <p className="text-xs text-slate-500">
-                Ce navigateur ne possède pas encore la clé de chiffrement de ce foyer.
+                Ce navigateur ne possède pas encore la clé de chiffrement de ce foyer. Vous pouvez continuer à travailler en local ou saisir votre clé pour activer la synchronisation.
               </p>
 
               {vaultAvailable && (
@@ -326,7 +324,7 @@ export function HouseholdOnboarding({
               <div className="flex items-center gap-2 text-slate-900">
                 <Users className="h-4 w-4 text-indigo-600" />
                 <h2 className="text-sm font-bold">
-                  {households.length > 0 ? 'Créer un autre foyer' : 'Créer votre foyer'}
+                  {households.length > 0 ? 'Créer un autre foyer' : 'Créer votre foyer chiffré'}
                 </h2>
               </div>
 
@@ -366,7 +364,7 @@ export function HouseholdOnboarding({
                     className="mt-0.5 rounded border-indigo-300"
                   />
                   <span>
-                    <strong>Importer mon budget local existant</strong> dans ce foyer chiffré (et nettoyer le stockage local).
+                    <strong>Utiliser mon budget local actuel</strong> pour initialiser ce foyer chiffré.
                   </span>
                 </label>
               )}
@@ -441,7 +439,7 @@ export function HouseholdOnboarding({
             </form>
           )}
         </div>
-      </div>
-    </div>
+      )}
+    </Modal>
   );
 }
