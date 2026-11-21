@@ -233,7 +233,7 @@ export function HouseholdModal({
                     type="text"
                     readOnly
                     value={invite.shareUrl}
-                    className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-[11px] text-slate-800"
+                    className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-[11px] text-slate-800"
                   />
                   <button
                     type="button"
@@ -334,8 +334,8 @@ export function HouseholdModal({
 
         {/* Sécurité E2EE */}
         <section className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
               <h4 className="flex items-center gap-1.5 text-xs font-bold text-emerald-950">
                 <ShieldCheck className="h-4 w-4 text-emerald-600" />
                 Chiffrement de bout en bout (AES-256-GCM)
@@ -357,7 +357,7 @@ export function HouseholdModal({
 
           {recoveryKey && (
             <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-white p-2">
-              <code className="flex-1 overflow-x-auto font-mono text-[11px] text-slate-900 select-all">
+              <code className="min-w-0 flex-1 overflow-x-auto font-mono text-[11px] text-slate-900 select-all">
                 {recoveryKey}
               </code>
               <button

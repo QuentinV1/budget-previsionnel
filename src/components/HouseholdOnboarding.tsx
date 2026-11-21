@@ -178,7 +178,7 @@ export function HouseholdOnboarding({
               Vos données sont chiffrées de bout en bout. Si vous changez d’appareil sans phrase secrète, cette clé permet de déchiffrer votre foyer.
             </p>
             <div className="mt-3 flex items-center gap-2">
-              <code className="flex-1 overflow-x-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2 font-mono text-[11px] text-slate-900 select-all">
+              <code className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2 font-mono text-[11px] text-slate-900 select-all">
                 {createdRecoveryKey.recoveryKey}
               </code>
               <button

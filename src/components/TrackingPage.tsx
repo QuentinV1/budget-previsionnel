@@ -213,7 +213,7 @@ export function TrackingPage({ state, summary, update }: Props) {
           </div>
 
           <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Kpi
                 label="Dépenses simulées"
                 value={formatEuro(sim.simSpending)}
@@ -258,7 +258,7 @@ export function TrackingPage({ state, summary, update }: Props) {
               max="2100-12"
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(e.target.value)}
-              className={inputCls}
+              className={`${inputCls} sm:w-auto`}
               aria-label="Mois suivi"
             />
             <Button onClick={() => fileRef.current?.click()}>
@@ -293,7 +293,7 @@ export function TrackingPage({ state, summary, update }: Props) {
                 </Button>
               </div>
             </div>
-            <div className="max-h-56 overflow-y-auto rounded-lg border border-indigo-100 bg-white">
+            <div className="max-h-56 overflow-x-auto overflow-y-auto rounded-lg border border-indigo-100 bg-white">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 text-[11px] text-slate-500">
                   <tr>

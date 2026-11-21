@@ -96,9 +96,52 @@ describe('computeMonthlyMap', () => {
   });
 });
 
+function buildSampleState() {
+  const base = createDefaultState();
+  base.sheets = [
+    { id: 'membre1', name: 'Alex', kind: 'person', color: 'indigo' },
+    { id: 'membre2', name: 'Sam', kind: 'person', color: 'rose' },
+    { id: 'commun', name: 'Commun', kind: 'common', color: 'slate' },
+  ];
+  const mkLine = (
+    sheetId: string,
+    section: BudgetLine['section'],
+    group: BudgetLine['group'],
+    id: string,
+    label: string,
+    amount: number,
+    extra: Partial<BudgetLine> = {}
+  ): BudgetLine => ({
+    id,
+    sheetId,
+    section,
+    group,
+    label,
+    comment: '',
+    mode: 'monthly',
+    amount,
+    annualAmount: 0,
+    share: 100,
+    percent: 100,
+    refLineIds: [],
+    categoryId: section === 'resource' ? '' : 'autres',
+    ...extra,
+  });
+  base.lines = [
+    mkLine('commun', 'expense', 'logement', 'c-loyer', 'Loyer', 900, { categoryId: 'logement' }),
+    mkLine('membre1', 'resource', 'salaires', 'm1-sal', 'Salaire Alex', 2500),
+    mkLine('membre1', 'expense', 'courant', 'm1-net', 'Netflix', 13.49, { categoryId: 'loisirs', tags: ['Abonnement'] }),
+    mkLine('membre1', 'expense', 'placements', 'm1-ep', 'Épargne Alex', 300, { categoryId: 'epargne' }),
+    mkLine('membre1', 'debt', 'virements', 'm1-vir', 'Compte commun', 500, { targetSheetId: 'commun' }),
+    mkLine('membre2', 'resource', 'salaires', 'm2-sal', 'Salaire Sam', 2000),
+    mkLine('membre2', 'debt', 'virements', 'm2-vir', 'Compte commun', 400, { targetSheetId: 'commun' }),
+  ];
+  return base;
+}
+
 describe('computeHousehold, computeByCategory & computeByTag', () => {
-  it('computes balanced transfers and household totals on default state', () => {
-    const state = createDefaultState();
+  it('computes balanced transfers and household totals on sample state', () => {
+    const state = buildSampleState();
     const summary = computeHousehold(state);
 
     expect(summary.transferControl).toBe(0);
@@ -109,7 +152,7 @@ describe('computeHousehold, computeByCategory & computeByTag', () => {
   });
 
   it('groups expenses by tag including Abonnement', () => {
-    const state = createDefaultState();
+    const state = buildSampleState();
     const summary = computeHousehold(state);
     const byTag = computeByTag(state, summary.monthly);
     const abo = byTag.find((t) => t.tag === 'Abonnement');
@@ -125,7 +168,7 @@ describe('computeHousehold, computeByCategory & computeByTag', () => {
 
 describe('finance utilities', () => {
   it('computes prorata contributions proportional to salaries', () => {
-    const state = createDefaultState();
+    const state = buildSampleState();
     const summary = computeHousehold(state);
     const pr = computeProrata(state, summary, 'commun');
 
@@ -137,6 +180,49 @@ describe('finance utilities', () => {
 
   it('computes reserve and multi-year wealth projection', () => {
     const state = createDefaultState();
+    state.lines.push(
+      {
+        id: 'loyer',
+        sheetId: 'commun',
+        section: 'expense',
+        group: 'logement',
+        label: 'Loyer',
+        comment: '',
+        mode: 'monthly',
+        amount: 900,
+        annualAmount: 0,
+        share: 100,
+        percent: 100,
+        refLineIds: [],
+        categoryId: 'logement',
+      },
+      {
+        id: 'epargne',
+        sheetId: 'commun',
+        section: 'expense',
+        group: 'placements',
+        label: 'Épargne',
+        comment: '',
+        mode: 'monthly',
+        amount: 300,
+        annualAmount: 0,
+        share: 100,
+        percent: 100,
+        refLineIds: [],
+        categoryId: 'epargne',
+      }
+    );
+    state.accounts.push({
+      id: 'acc-livret',
+      ownerId: 'commun',
+      name: 'Livret A',
+      type: 'livret',
+      capitalise: false,
+      monthlyIncome: 0,
+      note: '',
+      linkedLineIds: ['epargne'],
+      history: [{ date: '2026-10-01', balance: 5000 }],
+    });
     const summary = computeHousehold(state);
     const res = computeReserve(state, summary);
 
@@ -162,6 +248,21 @@ describe('storage & bankCsv utilities', () => {
 
   it('parses French bank CSV and auto-categorizes known labels', () => {
     const state = createDefaultState();
+    state.lines.push({
+      id: 'netflix',
+      sheetId: 'commun',
+      section: 'expense',
+      group: 'courant',
+      label: 'Netflix',
+      comment: '',
+      mode: 'monthly',
+      amount: 13.49,
+      annualAmount: 0,
+      share: 100,
+      percent: 100,
+      refLineIds: [],
+      categoryId: 'loisirs',
+    });
     const csv = [
       'Date;Libellé;Montant',
       '05/11/2026;NETFLIX.COM;-13,49',

@@ -43,14 +43,16 @@ import {
   subscribeUserHouseholds,
   upsertUserProfile,
 } from './services/householdService';
+import { createDefaultState } from './data/defaultData';
 import { BudgetLine, BudgetState, SHEET_COLORS } from './types';
 import { computeHousehold } from './utils/calc';
 import {
+  clearAllCachedKeys,
   getActiveHouseholdId,
   loadCachedHouseholdKey,
   setActiveHouseholdId,
 } from './utils/keyCache';
-import { exportCsv, hasLocalState, loadState, saveState } from './utils/storage';
+import { clearLocalState, exportCsv, hasLocalState, loadState, saveState } from './utils/storage';
 import { computeTips } from './utils/tips';
 
 export const CURRENT_APP_VERSION = '1.1.0';
@@ -489,6 +491,7 @@ export function App() {
   useEffect(() => {
     if (!firebaseEnabled || !auth) return;
     const unsub = onAuthStateChanged(auth, async (u) => {
+      const wasSignedIn = userRef.current !== null;
       setUser(u);
       userRef.current = u;
       if (u) {
@@ -501,6 +504,16 @@ export function App() {
         activeHouseholdRef.current = null;
         setHdk(null);
         hdkRef.current = null;
+        if (wasSignedIn) {
+          clearLocalState();
+          clearAllCachedKeys();
+          localStorage.removeItem(LAST_UID_KEY);
+          const freshState = createDefaultState();
+          suppressCloudSyncRef.current = true;
+          setState(freshState);
+          stateRef.current = freshState;
+          suppressCloudSyncRef.current = false;
+        }
       }
     });
     return () => {
@@ -532,9 +545,16 @@ export function App() {
     [scheduleCloudSave]
   );
 
-  // Déconnexion Cloud : désabonner listeners, réinitialiser cloudState, CONSERVER les données locales
+  // Déconnexion Cloud : désabonner listeners, réinitialiser cloudState et effacer les données locales
   const handleSignOut = async () => {
-    if (!window.confirm('Se déconnecter du compte Cloud ?')) return;
+    if (
+      !window.confirm(
+        'Se déconnecter du compte Cloud ? Les données affichées seront effacées de ce navigateur (elles restent sauvegardées dans le Cloud).'
+      )
+    ) {
+      return;
+    }
+    const uid = userRef.current?.uid;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     arreterListenersFirestore();
     reinitialiserEtatCloud();
@@ -548,6 +568,17 @@ export function App() {
     setAuthModalOpen(false);
     setHouseholdModalOpen(false);
     setShowOnboardingModal(false);
+    setSettingsOpen(false);
+    setUndoToast(null);
+    setActiveTab('synthese');
+    clearLocalState();
+    clearAllCachedKeys(uid);
+    localStorage.removeItem(LAST_UID_KEY);
+    const freshState = createDefaultState();
+    suppressCloudSyncRef.current = true;
+    setState(freshState);
+    stateRef.current = freshState;
+    suppressCloudSyncRef.current = false;
     await deconnexionFirebase();
   };
 
@@ -657,24 +688,24 @@ export function App() {
     <div className="min-h-screen bg-slate-50 text-slate-900">
       {/* Header + Navigation */}
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-sky-400 shadow-xs">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-3 py-2 sm:gap-3 sm:px-6 sm:py-2.5">
+          <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-2.5">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-sky-400 shadow-xs sm:h-9 sm:w-9">
               <Wallet className="h-4 w-4" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-sm font-bold tracking-tight text-slate-900 sm:text-base">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <h1 className="truncate text-sm font-bold tracking-tight text-slate-900 sm:text-base">
                   Budget — {state.householdName}
                 </h1>
                 <span
                   id="header-version-badge"
-                  className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600"
+                  className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600"
                 >
                   v{CURRENT_APP_VERSION}
                 </span>
               </div>
-              <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
+              <p className="flex items-center gap-1.5 truncate text-[11px] text-slate-500">
                 {!user ? (
                   <>
                     <Check className="h-3 w-3 text-emerald-600" />
@@ -709,7 +740,7 @@ export function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             {/* Bouton Connexion Cloud dans l'en-tête (aligné sur app-charcuterie) */}
             <button
               type="button"
@@ -717,7 +748,7 @@ export function App() {
               onClick={() => setAuthModalOpen(true)}
               title={user ? `Connecté : ${user.email || user.uid}` : 'Se connecter au Cloud'}
               aria-label="Compte Cloud"
-              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition ${
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition sm:px-2.5 ${
                 user
                   ? cloudState.syncStatus === 'error'
                     ? 'border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100'
@@ -726,11 +757,11 @@ export function App() {
               }`}
             >
               {user ? (
-                <User className="h-3.5 w-3.5 text-emerald-700" />
+                <User className="h-3.5 w-3.5 shrink-0 text-emerald-700" />
               ) : (
-                <Cloud className="h-3.5 w-3.5 text-slate-600" />
+                <Cloud className="h-3.5 w-3.5 shrink-0 text-slate-600" />
               )}
-              <span className="btn-text">{userShortLabel}</span>
+              <span className="btn-text max-w-[76px] truncate sm:max-w-none">{userShortLabel}</span>
             </button>
 
             {user && lockedHousehold && (
@@ -781,7 +812,7 @@ export function App() {
         <div className="border-t border-slate-100 bg-slate-50/60">
           <nav
             aria-label="Navigation principale"
-            className="mx-auto flex max-w-7xl flex-wrap items-center gap-1 px-4 py-1.5 sm:px-6"
+            className="scrollbar-none mx-auto flex max-w-7xl flex-nowrap items-center gap-1 overflow-x-auto px-3 py-1.5 sm:flex-wrap sm:overflow-visible sm:px-6"
           >
             <TabButton
               active={activeTab === 'synthese'}
@@ -856,7 +887,7 @@ export function App() {
       </header>
 
       {/* Contenu */}
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+      <main className="mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-6">
         {activeTab === 'synthese' && (
           <SynthesisPage state={state} summary={summary} update={update} goTo={setActiveTab} />
         )}
@@ -879,12 +910,12 @@ export function App() {
 
       {/* Toast Annuler suppression */}
       {undoToast && (
-        <div className="fixed right-4 bottom-4 z-40 flex items-center gap-3 rounded-xl bg-slate-900 px-4 py-2.5 text-xs text-white shadow-lg">
-          <span>« {undoToast.label} » supprimé</span>
+        <div className="fixed right-3 bottom-[max(1rem,env(safe-area-inset-bottom))] left-3 z-40 flex items-center justify-between gap-3 rounded-xl bg-slate-900 px-4 py-2.5 text-xs text-white shadow-lg sm:right-4 sm:left-auto">
+          <span className="truncate">« {undoToast.label} » supprimé</span>
           <button
             type="button"
             onClick={restoreLines}
-            className="inline-flex items-center gap-1 font-semibold text-sky-400 hover:underline"
+            className="inline-flex shrink-0 items-center gap-1 font-semibold text-sky-400 hover:underline"
           >
             <Undo2 className="h-3.5 w-3.5" /> Annuler
           </button>

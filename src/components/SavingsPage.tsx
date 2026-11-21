@@ -278,7 +278,7 @@ export function SavingsPage({ state, summary, update }: Props) {
                           ),
                         }));
                       }}
-                      className="max-w-[170px] truncate rounded-lg border border-slate-200 px-2 py-1 text-[11px] text-slate-600"
+                      className="min-w-0 flex-1 truncate rounded-lg border border-slate-200 px-2 py-1 text-[11px] text-slate-600 sm:max-w-[170px]"
                     >
                       <option value="">Aucune ligne liée</option>
                       {savingsLines.map((l) => (
@@ -370,7 +370,7 @@ export function SavingsPage({ state, summary, update }: Props) {
           </div>
         }
       >
-        <div className="mb-4 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-4">
+        <div className="mb-4 grid grid-cols-1 gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-4">
           <Field label="Rendement central (%/an)">
             <MoneyInput
               value={state.assumptions.rateCentral}

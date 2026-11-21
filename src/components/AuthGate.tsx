@@ -253,7 +253,7 @@ export function AuthGate({
         role="dialog"
         aria-modal="true"
         aria-label="Compte Cloud Budget Prévisionnel"
-        className="flex max-h-[92vh] w-full flex-col rounded-t-2xl bg-white shadow-xl sm:max-w-md sm:rounded-2xl"
+        className="flex max-h-[90dvh] w-full flex-col rounded-t-2xl bg-white pb-[env(safe-area-inset-bottom)] shadow-xl sm:max-w-md sm:rounded-2xl sm:pb-0"
       >
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
           <div className="flex items-center gap-2 font-semibold text-slate-900">

@@ -107,7 +107,7 @@ export function SheetPage({ state, sheet, summary, update, removeLines, goTo }: 
       </div>
 
       {/* Bandeau des totaux (comme le bas de la feuille Excel) */}
-      <div className="sticky top-[57px] z-20 -mx-4 border-y border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:top-[61px] sm:mx-0 sm:rounded-2xl sm:border sm:shadow-xs">
+      <div className="-mx-3 border-y border-slate-200 bg-white/95 px-3 py-3 backdrop-blur sm:sticky sm:top-[61px] sm:z-20 sm:mx-0 sm:rounded-2xl sm:border sm:px-4 sm:shadow-xs">
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-5">
           <Total label="Total ressources" value={sum.totalResources} tone="text-emerald-700" />
           <Total label="Total dépenses" value={sum.totalExpenses} tone="text-slate-900" />
@@ -132,14 +132,14 @@ export function SheetPage({ state, sheet, summary, update, removeLines, goTo }: 
             {sum.incoming.length > 0 && (
               <Group label="Virements reçus" subtotal={sum.transfersIn}>
                 {sum.incoming.map((t) => (
-                  <div key={t.line.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm">
+                  <div key={t.line.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg px-2 py-1.5 text-sm sm:flex-nowrap">
                     <ArrowRightLeft className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                    <span className="flex-1 truncate text-slate-700">{t.fromSheet?.name ?? '?'}</span>
-                    <button type="button" onClick={() => goTo(t.line.sheetId)} className="text-[11px] text-indigo-600 hover:underline">
+                    <span className="min-w-0 flex-1 truncate text-slate-700">{t.fromSheet?.name ?? '?'}</span>
+                    <button type="button" onClick={() => goTo(t.line.sheetId)} className="shrink-0 text-[11px] text-indigo-600 hover:underline">
                       modifier dans Budget - {t.fromSheet?.name}
                     </button>
-                    <span className="w-28 text-right font-medium tabular-nums text-slate-900">{formatEuro(t.amount)}</span>
-                    <span className="w-14" />
+                    <span className="w-auto shrink-0 text-right font-medium tabular-nums text-slate-900 sm:w-28">{formatEuro(t.amount)}</span>
+                    <span className="hidden sm:inline-block sm:w-14" />
                   </div>
                 ))}
               </Group>
@@ -333,8 +333,8 @@ function LineRow({ line, state, sheet, monthly, patchLine, onEdit, onDelete, foc
   const zero = value === 0;
 
   return (
-    <div className={`group grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 rounded-lg px-1 py-0.5 hover:bg-slate-50 sm:grid-cols-[minmax(0,1fr)_150px_128px_56px] ${zero ? 'opacity-70' : ''}`}>
-      <div className="col-span-2 min-w-0 sm:col-span-1">
+    <div className={`group grid grid-cols-[minmax(0,1fr)_108px_auto] items-center gap-x-2 gap-y-1 rounded-lg px-1 py-0.5 hover:bg-slate-50 sm:grid-cols-[minmax(0,1fr)_150px_128px_56px] ${zero ? 'opacity-70' : ''}`}>
+      <div className="col-span-3 min-w-0 sm:col-span-1">
         <div className="flex items-center gap-1.5">
           {showCategory && <span className="ml-1 h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: cat?.color ?? '#cbd5e1' }} />}
           {isTransfer && <ArrowRightLeft className="ml-1 h-3.5 w-3.5 shrink-0 text-slate-400" />}

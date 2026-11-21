@@ -9,7 +9,7 @@ export function Card({ children, className = '', title, action, subtitle }: { ch
     <section className={`rounded-2xl border border-slate-200 bg-white p-4 shadow-xs sm:p-5 ${className}`}>
       {(title || action) && (
         <header className="mb-4 flex flex-wrap items-start justify-between gap-2">
-          <div>
+          <div className="min-w-0">
             {title && <h2 className="text-sm font-semibold text-slate-900 sm:text-base">{title}</h2>}
             {subtitle && <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p>}
           </div>
@@ -125,7 +125,7 @@ export const inputCls =
 
 export function Segmented<T extends string>({ options, value, onChange, size = 'sm' }: { options: { id: T; label: ReactNode; title?: string }[]; value: T; onChange: (v: T) => void; size?: 'xs' | 'sm' }) {
   return (
-    <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100/70 p-0.5" role="tablist">
+    <div className="scrollbar-none inline-flex max-w-full overflow-x-auto rounded-lg border border-slate-200 bg-slate-100/70 p-0.5" role="tablist">
       {options.map((o) => (
         <button
           key={o.id}
@@ -156,15 +156,15 @@ export function Modal({ open, onClose, title, children, footer, wide }: { open: 
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 backdrop-blur-[2px] sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} role="dialog" aria-modal="true" aria-label={title} className={`flex max-h-[92vh] w-full flex-col rounded-t-2xl bg-white shadow-xl sm:rounded-2xl ${wide ? 'sm:max-w-2xl' : 'sm:max-w-md'}`}>
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
-          <h3 className="font-semibold text-slate-900">{title}</h3>
-          <button type="button" onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Fermer">
+      <div ref={ref} role="dialog" aria-modal="true" aria-label={title} className={`flex max-h-[90dvh] w-full flex-col rounded-t-2xl bg-white pb-[env(safe-area-inset-bottom)] shadow-xl sm:rounded-2xl sm:pb-0 ${wide ? 'sm:max-w-2xl' : 'sm:max-w-md'}`}>
+        <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3 sm:px-5 sm:py-3.5">
+          <h3 className="min-w-0 truncate font-semibold text-slate-900">{title}</h3>
+          <button type="button" onClick={onClose} className="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Fermer">
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">{footer}</div>}
+        <div className="overflow-y-auto px-4 py-4 sm:px-5">{children}</div>
+        {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 px-4 py-3 sm:px-5">{footer}</div>}
       </div>
     </div>
   );

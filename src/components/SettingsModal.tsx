@@ -248,11 +248,13 @@ export function SettingsModal({ open, onClose, state, update, onSheetRemoved }: 
             <Button
               variant="danger"
               onClick={() => {
-                update(() => createDefaultState());
+                if (window.confirm('Réinitialiser toutes les données du budget ?')) {
+                  update(() => createDefaultState());
+                }
               }}
               className="ml-auto"
             >
-              <RotateCcw className="h-3.5 w-3.5" /> Réinitialiser (données Excel)
+              <RotateCcw className="h-3.5 w-3.5" /> Tout réinitialiser
             </Button>
           </div>
           {importError && <p className="mt-2 text-xs text-rose-600">{importError}</p>}
