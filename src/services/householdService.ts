@@ -12,6 +12,7 @@ import {
   increment,
   onSnapshot,
   query,
+  serverTimestamp,
   setDoc,
   updateDoc,
   where,
@@ -70,15 +71,23 @@ function userLabel(user: User): string {
 
 export async function upsertUserProfile(user: User): Promise<void> {
   const firestore = requireDb();
-  await setDoc(
-    doc(firestore, 'users', user.uid),
-    {
-      displayName: userLabel(user),
+  const ref = doc(firestore, 'users', user.uid);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) {
+    await setDoc(ref, {
+      uid: user.uid,
       email: user.email ?? '',
-      updatedAt: new Date().toISOString(),
-    },
-    { merge: true }
-  );
+      displayName: userLabel(user),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    await updateDoc(ref, {
+      email: user.email ?? '',
+      displayName: userLabel(user),
+      updatedAt: serverTimestamp(),
+    });
+  }
 }
 
 export async function listUserHouseholds(uid: string): Promise<HouseholdDoc[]> {
