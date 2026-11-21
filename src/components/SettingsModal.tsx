@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Download, FileSpreadsheet, Plus, RotateCcw, Trash2, Upload, User, Users } from 'lucide-react';
+import { Download, ExternalLink, FileSpreadsheet, LayoutGrid, Plus, RotateCcw, Trash2, Upload, User, Users } from 'lucide-react';
 import { createDefaultState } from '../data/defaultData';
 import { BudgetState, Bucket, SHEET_COLORS, Sheet, SheetColor, SheetKind } from '../types';
 import { createId } from '../utils/format';
@@ -27,6 +27,7 @@ export function SettingsModal({ open, onClose, state, update, onSheetRemoved }: 
   const [newCatBucket, setNewCatBucket] = useState<Bucket>('besoin');
 
   const [importError, setImportError] = useState('');
+  const [showOtherApps, setShowOtherApps] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const addSheet = () => {
@@ -256,7 +257,63 @@ export function SettingsModal({ open, onClose, state, update, onSheetRemoved }: 
           </div>
           {importError && <p className="mt-2 text-xs text-rose-600">{importError}</p>}
         </section>
+
+        {/* Mes autres applications */}
+        <section className="border-t border-slate-200 pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h4 className="text-xs font-bold tracking-wider text-slate-500 uppercase">
+                Mes autres applications
+              </h4>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Accéder rapidement aux autres applications web (GitHub Pages).
+              </p>
+            </div>
+            <Button variant="primary" onClick={() => setShowOtherApps(true)}>
+              <LayoutGrid className="h-3.5 w-3.5" /> Mes autres applications
+            </Button>
+          </div>
+        </section>
       </div>
+
+      <Modal open={showOtherApps} onClose={() => setShowOtherApps(false)} title="Mes autres applications">
+        <div className="space-y-2.5">
+          <p className="text-xs text-slate-500">
+            Retrouvez toutes les autres applications hébergées sur GitHub Pages.
+          </p>
+          <div className="grid max-h-[60vh] gap-2 overflow-y-auto pr-1">
+            {[
+              { name: "L'Affinoir", desc: "Charcuterie, salaisons & cave d'affinage", url: 'https://quentinv1.github.io/app-charcuterie/' },
+              { name: 'Pêche France', desc: 'Réglementation, mailles, cartes & carnet de prises', url: 'https://quentinv1.github.io/app-peche/' },
+              { name: 'App Voyage', desc: "Planificateur d'itinéraire, carte & carnet de voyage", url: 'https://quentinv1.github.io/app-voyage/' },
+              { name: 'Cave à vin', desc: 'Stock de bouteilles, apogée & dégustations', url: 'https://quentinv1.github.io/cave-a-vin/' },
+              { name: 'Checklist Valise', desc: 'Bagages, calculateur de poids & règles IATA', url: 'https://quentinv1.github.io/checklist-valise/' },
+              { name: 'Livre de recettes', desc: 'Recettes, planning semaine & liste de courses', url: 'https://quentinv1.github.io/livre-recettes/' },
+              { name: 'Suivi Chasse', desc: 'Carnet de sorties, carte & album trophées', url: 'https://quentinv1.github.io/suivi-chasse/' },
+              { name: 'Travaux Maison', desc: 'Plan 2D/3D, courses, tâches & entretien', url: 'https://quentinv1.github.io/travaux-maison/' },
+            ].map((app) => (
+              <a
+                key={app.url}
+                href={app.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 transition hover:border-indigo-300 hover:bg-indigo-50/50"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-slate-800">{app.name}</div>
+                  <div className="truncate text-xs text-slate-500">{app.desc}</div>
+                </div>
+                <span className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-indigo-600">
+                  Ouvrir <ExternalLink className="h-3.5 w-3.5" />
+                </span>
+              </a>
+            ))}
+          </div>
+          <div className="flex justify-end pt-2">
+            <Button onClick={() => setShowOtherApps(false)}>Fermer</Button>
+          </div>
+        </div>
+      </Modal>
     </Modal>
   );
 }
