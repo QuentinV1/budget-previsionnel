@@ -10,6 +10,7 @@ import {
   Lightbulb,
   Lock,
   LogOut,
+  MessageSquarePlus,
   PiggyBank,
   Plus,
   RefreshCw,
@@ -23,6 +24,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { AuthGate, CloudState } from './components/AuthGate';
+import { FeedbackModal } from './components/FeedbackModal';
 import { HouseholdModal } from './components/HouseholdModal';
 import { HouseholdOnboarding } from './components/HouseholdOnboarding';
 import { SavingsPage } from './components/SavingsPage';
@@ -131,6 +133,7 @@ export function App() {
 
   const [activeTab, setActiveTab] = useState<string>('synthese');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [undoToast, setUndoToast] = useState<{ label: string; lines: BudgetLine[] } | null>(null);
 
   // Refs de contrôle de synchro (anti-écho & debounce 450 ms)
@@ -1003,6 +1006,16 @@ export function App() {
             </button>
             <button
               type="button"
+              onClick={() => setFeedbackOpen(true)}
+              title="Envoyer un feedback (évolution ou bug)"
+              aria-label="Envoyer un feedback"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              <MessageSquarePlus className="h-3.5 w-3.5 text-indigo-600" />
+              <span className="hidden sm:inline">Feedback</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setSettingsOpen(true)}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
             >
@@ -1134,6 +1147,14 @@ export function App() {
         onSheetRemoved={(id) => {
           if (activeTab === id) setActiveTab('synthese');
         }}
+      />
+
+      <FeedbackModal
+        open={feedbackOpen}
+        user={user}
+        db={db}
+        context={`tab=${activeTab}`}
+        onClose={() => setFeedbackOpen(false)}
       />
 
       {/* Modale Cloud non bloquante (alignée sur app-charcuterie) */}
