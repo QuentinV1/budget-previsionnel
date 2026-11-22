@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
   AlertTriangle,
@@ -24,6 +24,12 @@ import {
   savePassphraseVault,
 } from '../services/householdService';
 import { exportKeyBase64Url } from '../utils/crypto';
+import { db } from '../firebase';
+import {
+  WhitelistEntry,
+  listShareableAppUsers,
+  normalizeEmail,
+} from '../services/accessControl';
 import { Modal } from './ui';
 
 interface Props {
@@ -63,9 +69,31 @@ export function HouseholdModal({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [shareableUsers, setShareableUsers] = useState<WhitelistEntry[]>([]);
+
+  useEffect(() => {
+    if (!open) {
+      setShareableUsers([]);
+      return;
+    }
+    let cancelled = false;
+    listShareableAppUsers(db, 'budget-previsionnel')
+      .then((list) => {
+        if (!cancelled) setShareableUsers(list);
+      })
+      .catch(() => {
+        if (!cancelled) setShareableUsers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   const isOwner = household.ownerId === user.uid;
   const membersList = Object.values(household.members ?? {});
+  const memberEmails = new Set(
+    membersList.map((m) => (m.email ? normalizeEmail(m.email) : '')).filter(Boolean)
+  );
 
   const handleGenerateInvite = async () => {
     setError('');
@@ -349,6 +377,35 @@ export function HouseholdModal({
               <UserMinus className="h-3.5 w-3.5" />
               Quitter ce foyer
             </button>
+          )}
+
+          {shareableUsers.length > 0 && (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+              <p className="mb-2 text-[11px] font-semibold text-slate-600">
+                Membres autorisés sur l&apos;application
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {shareableUsers.map((entry) => {
+                  const inHousehold = memberEmails.has(normalizeEmail(entry.email));
+                  return (
+                    <span
+                      key={entry.email}
+                      title={entry.email}
+                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
+                        inHousehold
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'border border-indigo-200 bg-indigo-50 text-indigo-800'
+                      }`}
+                    >
+                      {entry.displayName || entry.email}
+                      <span className="text-[10px] opacity-75">
+                        {inHousehold ? '· dans le foyer' : '· invitable'}
+                      </span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
           )}
         </section>
 

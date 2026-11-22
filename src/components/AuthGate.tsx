@@ -9,6 +9,7 @@ import {
   LogOut,
   Mail,
   RefreshCw,
+  Shield,
   ShieldCheck,
   UserPlus,
   Users,
@@ -17,6 +18,7 @@ import {
 import {
   connexionEmail,
   connexionGoogle,
+  db,
   formatSyncError,
   inscriptionEmail,
   isFirebaseConfigured,
@@ -25,6 +27,8 @@ import {
   renvoyerEmailVerification,
 } from '../firebase';
 import { HouseholdDoc } from '../services/householdService';
+import { resolveUserAccess, type AccessStatus } from '../services/accessControl';
+import { AccessControlPanel } from './AccessControlPanel';
 
 export interface CloudState {
   initialSyncDone: boolean;
@@ -102,6 +106,30 @@ export function AuthGate({
     'Vérifiez votre boîte mail (et vos spams), puis cliquez sur « J’ai vérifié » (ou utilisez « Continuer avec Google »).'
   );
   const [syncLocalErr, setSyncLocalErr] = useState('');
+  const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
+  const [activeTab, setActiveTab] = useState<'account' | 'access'>('account');
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!open || !user || !user.emailVerified || !db || !user.email) {
+      setAccessStatus(null);
+      setActiveTab('account');
+      return;
+    }
+    resolveUserAccess(db, 'budget-previsionnel', user.email)
+      .then((status) => {
+        if (!cancelled) {
+          setAccessStatus(status);
+          if (!status.isAdmin) setActiveTab('account');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAccessStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, user?.uid, user?.emailVerified, user?.email]);
 
   useEffect(() => {
     if (!open) return;
@@ -253,7 +281,9 @@ export function AuthGate({
         role="dialog"
         aria-modal="true"
         aria-label="Compte Cloud Budget Prévisionnel"
-        className="flex max-h-[90dvh] w-full flex-col rounded-t-2xl bg-white pb-[env(safe-area-inset-bottom)] shadow-xl sm:max-w-md sm:rounded-2xl sm:pb-0"
+        className={`flex max-h-[90dvh] w-full flex-col rounded-t-2xl bg-white pb-[env(safe-area-inset-bottom)] shadow-xl sm:rounded-2xl sm:pb-0 ${
+          user && accessStatus?.isAdmin && activeTab === 'access' ? 'sm:max-w-xl' : 'sm:max-w-md'
+        }`}
       >
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
           <div className="flex items-center gap-2 font-semibold text-slate-900">
@@ -440,128 +470,189 @@ export function AuthGate({
           ) : (
             /* Panneau compte connecté */
             <div id="auth-logged-in-panel" className="space-y-3.5">
-              <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3.5">
-                <div className="text-[11px] font-bold tracking-wider text-slate-500 uppercase">
-                  Connecté en tant que
-                </div>
-                <div id="auth-connected-email" className="mt-0.5 text-sm font-bold break-all text-slate-900">
-                  {user.email || user.displayName || user.uid}
-                </div>
-                <div id="auth-sync-status" className={`mt-1.5 text-xs font-medium ${statusInfo.cls}`}>
-                  {statusInfo.text}
-                </div>
-              </div>
-
-              {effectiveSyncError && (
+              {accessStatus?.isAdmin && (
                 <div
-                  id="auth-sync-error-msg"
-                  className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800"
+                  role="tablist"
+                  aria-label="Gestion du compte et des accès"
+                  className="grid grid-cols-2 gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1"
                 >
-                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span>{effectiveSyncError}</span>
-                </div>
-              )}
-
-              {!user.emailVerified && (
-                <div
-                  id="auth-unverified-box"
-                  className="space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-950"
-                >
-                  <div className="font-bold text-amber-800">Adresse e-mail non vérifiée</div>
-                  <div id="auth-unverified-msg" className="text-amber-900/80">
-                    {verifMsg}
-                  </div>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    <button
-                      type="button"
-                      id="btn-resend-verif"
-                      disabled={busy}
-                      onClick={handleResendVerif}
-                      className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
-                    >
-                      Renvoyer l’e-mail de vérification
-                    </button>
-                    <button
-                      type="button"
-                      id="btn-check-verif"
-                      disabled={busy}
-                      onClick={handleCheckVerif}
-                      className="rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-800 disabled:opacity-50"
-                    >
-                      J’ai vérifié
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {user.emailVerified && lockedHousehold && (
-                <div className="space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-950">
-                  <div className="flex items-center gap-1.5 font-bold text-amber-900">
-                    <Lock className="h-3.5 w-3.5" />
-                    <span>Foyer chiffré « {lockedHousehold.name} » verrouillé</span>
-                  </div>
-                  <p className="text-amber-800">
-                    Saisissez votre phrase secrète ou clé de secours pour déchiffrer et synchroniser ce foyer sur cet appareil.
-                  </p>
                   <button
                     type="button"
-                    onClick={() => {
-                      onClose();
-                      onOpenOnboardingModal();
-                    }}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                    role="tab"
+                    aria-selected={activeTab === 'account'}
+                    onClick={() => setActiveTab('account')}
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                      activeTab === 'account'
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
                   >
-                    <KeyRound className="h-3.5 w-3.5" />
-                    Déverrouiller le foyer
+                    <Cloud className="h-3.5 w-3.5" />
+                    <span>Compte Cloud</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'access'}
+                    onClick={() => setActiveTab('access')}
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                      activeTab === 'access'
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Shield className="h-3.5 w-3.5" />
+                    <span>Accès &amp; Rôles</span>
                   </button>
                 </div>
               )}
 
-              {user.emailVerified && activeHousehold && !lockedHousehold && (
-                <div className="flex items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 text-xs">
-                  <div className="min-w-0">
-                    <div className="font-bold text-indigo-950 truncate">
-                      Foyer : {activeHousehold.name}
+              {accessStatus?.isAdmin && activeTab === 'access' ? (
+                <AccessControlPanel
+                  db={db}
+                  user={user}
+                  appId="budget-previsionnel"
+                  appName="Budget Prévisionnel"
+                  theme="light"
+                />
+              ) : (
+                <>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3.5">
+                    <div className="text-[11px] font-bold tracking-wider text-slate-500 uppercase">
+                      Connecté en tant que
                     </div>
-                    <div className="text-[11px] text-indigo-700">
-                      {activeHousehold.memberIds.length} membre{activeHousehold.memberIds.length > 1 ? 's' : ''} · Chiffré E2EE
+                    <div id="auth-connected-email" className="mt-0.5 text-sm font-bold break-all text-slate-900">
+                      {user.email || user.displayName || user.uid}
+                    </div>
+                    <div id="auth-sync-status" className={`mt-1.5 text-xs font-medium ${statusInfo.cls}`}>
+                      {statusInfo.text}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onClose();
-                      onOpenHouseholdModal();
-                    }}
-                    className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-indigo-900 hover:bg-indigo-100"
-                  >
-                    <Users className="h-3.5 w-3.5 text-indigo-600" />
-                    Partage & E2EE
-                  </button>
-                </div>
-              )}
 
-              <div className="flex flex-col gap-2 pt-1">
-                <button
-                  type="button"
-                  id="btn-force-sync"
-                  disabled={busy}
-                  onClick={handleForceSync}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
-                >
-                  <RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} />
-                  Synchroniser maintenant
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={onSignOut}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
-                >
-                  <LogOut className="h-4 w-4" />
-                  Se déconnecter
-                </button>
-              </div>
+                  {accessStatus && !accessStatus.hasAppAccess && (
+                    <div
+                      id="auth-access-denied-msg"
+                      className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-medium text-rose-800"
+                    >
+                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        Votre compte n&apos;est pas autorisé sur cette application. Contactez un administrateur.
+                      </span>
+                    </div>
+                  )}
+
+                  {effectiveSyncError && (
+                    <div
+                      id="auth-sync-error-msg"
+                      className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800"
+                    >
+                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>{effectiveSyncError}</span>
+                    </div>
+                  )}
+
+                  {!user.emailVerified && (
+                    <div
+                      id="auth-unverified-box"
+                      className="space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-950"
+                    >
+                      <div className="font-bold text-amber-800">Adresse e-mail non vérifiée</div>
+                      <div id="auth-unverified-msg" className="text-amber-900/80">
+                        {verifMsg}
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          type="button"
+                          id="btn-resend-verif"
+                          disabled={busy}
+                          onClick={handleResendVerif}
+                          className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                        >
+                          Renvoyer l’e-mail de vérification
+                        </button>
+                        <button
+                          type="button"
+                          id="btn-check-verif"
+                          disabled={busy}
+                          onClick={handleCheckVerif}
+                          className="rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-800 disabled:opacity-50"
+                        >
+                          J’ai vérifié
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {user.emailVerified && lockedHousehold && (
+                    <div className="space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-950">
+                      <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                        <Lock className="h-3.5 w-3.5" />
+                        <span>Foyer chiffré « {lockedHousehold.name} » verrouillé</span>
+                      </div>
+                      <p className="text-amber-800">
+                        Saisissez votre phrase secrète ou clé de secours pour déchiffrer et synchroniser ce foyer sur cet appareil.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenOnboardingModal();
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                      >
+                        <KeyRound className="h-3.5 w-3.5" />
+                        Déverrouiller le foyer
+                      </button>
+                    </div>
+                  )}
+
+                  {user.emailVerified && activeHousehold && !lockedHousehold && (
+                    <div className="flex items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 text-xs">
+                      <div className="min-w-0">
+                        <div className="font-bold text-indigo-950 truncate">
+                          Foyer : {activeHousehold.name}
+                        </div>
+                        <div className="text-[11px] text-indigo-700">
+                          {activeHousehold.memberIds.length} membre{activeHousehold.memberIds.length > 1 ? 's' : ''} · Chiffré E2EE
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenHouseholdModal();
+                        }}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-indigo-900 hover:bg-indigo-100"
+                      >
+                        <Users className="h-3.5 w-3.5 text-indigo-600" />
+                        Partage & E2EE
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-2 pt-1">
+                    <button
+                      type="button"
+                      id="btn-force-sync"
+                      disabled={busy}
+                      onClick={handleForceSync}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} />
+                      Synchroniser maintenant
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={onSignOut}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
+                    >
+                      <LogOut className="h-4 w-4" />
+                      Se déconnecter
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
