@@ -66,3 +66,11 @@ export function setActiveHouseholdId(uid: string, householdId: string): void {
     /* ignore */
   }
 }
+
+export function clearActiveHouseholdId(uid: string): void {
+  try {
+    localStorage.removeItem(`${ACTIVE_HOUSEHOLD_PREFIX}${uid}`);
+  } catch {
+    /* ignore */
+  }
+}

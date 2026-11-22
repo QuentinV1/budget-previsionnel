@@ -346,7 +346,7 @@ service cloud.firestore {
     // Household invitations (get only, list denied to prevent enumeration)
     match /invites/{inviteId} {
       allow get: if isAuthenticated();
-      allow list: if false;
+      allow list: if isAuthenticated() && resource.data.createdBy == request.auth.uid;
 
       allow create: if isAuthenticated() &&
         isValidInvite(request.resource.data) &&

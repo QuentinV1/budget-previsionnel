@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
+  AlertTriangle,
   Check,
   Copy,
   KeyRound,
@@ -17,6 +18,7 @@ import {
   HouseholdDoc,
   InviteCreateResult,
   createHouseholdInvite,
+  deleteHousehold,
   leaveHousehold,
   removeHouseholdMember,
   savePassphraseVault,
@@ -34,6 +36,7 @@ interface Props {
   onSwitchHousehold: (householdId: string) => void;
   onOpenCreateOrJoin: () => void;
   onLeftHousehold: () => void;
+  onDeletedHousehold: (householdId: string) => void;
   onSignOut: () => void;
 }
 
@@ -47,6 +50,7 @@ export function HouseholdModal({
   onSwitchHousehold,
   onOpenCreateOrJoin,
   onLeftHousehold,
+  onDeletedHousehold,
   onSignOut,
 }: Props) {
   const [invite, setInvite] = useState<InviteCreateResult | null>(null);
@@ -56,6 +60,7 @@ export function HouseholdModal({
   const [copiedRecovery, setCopiedRecovery] = useState(false);
   const [passphrase, setPassphrase] = useState('');
   const [vaultSaved, setVaultSaved] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -124,6 +129,21 @@ export function HouseholdModal({
       onClose();
     } catch (err: unknown) {
       setError((err as Error)?.message || 'Impossible de quitter ce foyer.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeleteHousehold = async () => {
+    setError('');
+    setBusy(true);
+    try {
+      await deleteHousehold(household.id, user.uid);
+      setConfirmDelete(false);
+      onDeletedHousehold(household.id);
+      onClose();
+    } catch (err: unknown) {
+      setError((err as Error)?.message || 'Impossible de supprimer ce foyer.');
     } finally {
       setBusy(false);
     }
@@ -396,6 +416,61 @@ export function HouseholdModal({
             {vaultSaved && <span className="text-[11px] font-semibold text-emerald-700">Enregistrée !</span>}
           </form>
         </section>
+
+        {/* Zone de danger : suppression définitive du foyer */}
+        {isOwner && (
+          <section className="rounded-xl border border-rose-200 bg-rose-50/60 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h4 className="flex items-center gap-1.5 text-xs font-bold text-rose-950">
+                  <AlertTriangle className="h-4 w-4 text-rose-600" />
+                  Supprimer « {household.name} »
+                </h4>
+                <p className="mt-0.5 text-[11px] text-rose-800">
+                  Supprime définitivement ce foyer et toutes les données associées (feuilles de budget, lignes, comptes, objectifs, prêts, suivi mensuel, coffre-fort de clé et invitations) pour tous les membres.
+                </p>
+              </div>
+              {!confirmDelete && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setConfirmDelete(true)}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Supprimer ce foyer
+                </button>
+              )}
+            </div>
+
+            {confirmDelete && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-300 bg-white p-3">
+                <p className="text-xs font-medium text-rose-900">
+                  Action irréversible. Confirmer la suppression définitive de « {household.name} » ?
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setConfirmDelete(false)}
+                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={handleDeleteHousehold}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {busy ? 'Suppression…' : 'Confirmer la suppression'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
       </div>
     </Modal>
   );

@@ -4,7 +4,6 @@ import {
   arrayRemove,
   arrayUnion,
   collection,
-  deleteDoc,
   deleteField,
   doc,
   getDoc,
@@ -33,7 +32,12 @@ import {
   unwrapHouseholdKey,
   wrapHouseholdKey,
 } from '../utils/crypto';
-import { removeCachedHouseholdKey, saveCachedHouseholdKey } from '../utils/keyCache';
+import {
+  clearActiveHouseholdId,
+  getActiveHouseholdId,
+  removeCachedHouseholdKey,
+  saveCachedHouseholdKey,
+} from '../utils/keyCache';
 import { normalizeState } from '../utils/storage';
 
 export interface HouseholdMember {
@@ -473,6 +477,33 @@ export async function leaveHousehold(householdId: string, uid: string): Promise<
 
 export async function deleteHousehold(householdId: string, uid: string): Promise<void> {
   const firestore = requireDb();
-  await deleteDoc(doc(firestore, 'households', householdId));
+
+  // Collecter les invitations créées par l'utilisateur pour ce foyer
+  const inviteRefs: ReturnType<typeof doc>[] = [];
+  try {
+    const invitesSnap = await getDocs(
+      query(collection(firestore, 'invites'), where('createdBy', '==', uid))
+    );
+    invitesSnap.forEach((d) => {
+      const data = d.data() as { householdId?: string };
+      if (data.householdId === householdId) {
+        inviteRefs.push(d.ref);
+      }
+    });
+  } catch {
+    /* Ignorer si les règles de liste d'invitations ne sont pas encore déployées */
+  }
+
+  const batch = writeBatch(firestore);
+  for (const inviteRef of inviteRefs.slice(0, 450)) {
+    batch.delete(inviteRef);
+  }
+  batch.delete(doc(firestore, 'users', uid, 'keyVault', householdId));
+  batch.delete(doc(firestore, 'households', householdId));
+  await batch.commit();
+
   removeCachedHouseholdKey(uid, householdId);
+  if (getActiveHouseholdId(uid) === householdId) {
+    clearActiveHouseholdId(uid);
+  }
 }

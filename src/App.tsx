@@ -646,6 +646,40 @@ export function App() {
     }
   };
 
+  const handleDeletedHousehold = async (deletedId: string) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    dirtyRef.current = false;
+    lastRemoteCipherRef.current = '';
+    setUndoToast(null);
+
+    const remaining = households.filter((h) => h.id !== deletedId);
+    setHouseholds(remaining);
+    setHouseholdModalOpen(false);
+
+    if (remaining.length > 0) {
+      await handleSwitchHousehold(remaining[0].id);
+      return;
+    }
+
+    setHdk(null);
+    hdkRef.current = null;
+    setActiveHousehold(null);
+    activeHouseholdRef.current = null;
+    clearLocalState();
+    const freshState = createDefaultState();
+    suppressCloudSyncRef.current = true;
+    setState(freshState);
+    stateRef.current = freshState;
+    suppressCloudSyncRef.current = false;
+    setActiveTab('synthese');
+    updateCloudState({
+      syncStatus: 'synced',
+      syncError: null,
+      lastSyncedAt: new Date().toISOString(),
+    });
+    setShowOnboardingModal(true);
+  };
+
   const summary = useMemo(() => computeHousehold(state), [state]);
   const tipsCount = useMemo(
     () =>
@@ -964,6 +998,7 @@ export function App() {
           onSwitchHousehold={handleSwitchHousehold}
           onOpenCreateOrJoin={() => setShowOnboardingModal(true)}
           onLeftHousehold={() => activerSyncCloud(user)}
+          onDeletedHousehold={handleDeletedHousehold}
           onSignOut={handleSignOut}
         />
       )}
