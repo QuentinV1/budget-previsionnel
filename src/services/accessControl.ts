@@ -3,6 +3,7 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   setDoc,
   writeBatch,
@@ -38,6 +39,7 @@ export const INITIAL_GLOBAL_WHITELIST: Array<{ email: string; displayName: strin
   { email: 'clementvaslin@gmail.com', displayName: 'Clément', role: 'user' },
   { email: 'delisle-margaux@hotmail.com', displayName: 'Margaux', role: 'user' },
   { email: 'mar9aux-delisle@hotmail.fr', displayName: 'Margaux (alt)', role: 'user' },
+  { email: 'vaslin.muriel45@gmail.com', displayName: 'Muriel', role: 'user' },
 ];
 
 export function normalizeEmail(email: string): string {
@@ -48,30 +50,97 @@ export function isValidEmailFormat(email: string): boolean {
   return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email.trim());
 }
 
-export async function resolveUserAccess(
-  db: Firestore | null | undefined,
-  appId: string,
-  userEmail: string | null | undefined,
-): Promise<AccessStatus> {
-  const email = userEmail ? normalizeEmail(userEmail) : '';
-  if (!db || !email) {
-    return {
-      isGlobalAdmin: false,
-      isAppAdmin: false,
-      isAdmin: false,
-      hasAppAccess: false,
-      appConfigured: false,
-      role: null,
+const DENIED_ACCESS_STATUS: AccessStatus = {
+  isGlobalAdmin: false,
+  isAppAdmin: false,
+  isAdmin: false,
+  hasAppAccess: false,
+  appConfigured: false,
+  role: null,
+};
+
+const AUTH_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function getAuthCacheKey(appId: string): string {
+  return `hub_auth_cache_${appId}`;
+}
+
+export function clearAuthAccessCache(appId: string): void {
+  try {
+    localStorage.removeItem(getAuthCacheKey(appId));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+interface CachedAuthAccess {
+  uid: string;
+  email: string;
+  access: AccessStatus;
+  verifiedAt: number;
+}
+
+function readValidAuthCache(appId: string, uid: string, email: string): AccessStatus | null {
+  try {
+    const raw = localStorage.getItem(getAuthCacheKey(appId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CachedAuthAccess>;
+    if (
+      parsed.uid !== uid ||
+      parsed.email !== email ||
+      typeof parsed.verifiedAt !== 'number' ||
+      Date.now() - parsed.verifiedAt > AUTH_CACHE_TTL_MS ||
+      !parsed.access?.hasAppAccess
+    ) {
+      return null;
+    }
+    return parsed.access;
+  } catch {
+    return null;
+  }
+}
+
+function writeAuthCache(appId: string, uid: string, email: string, access: AccessStatus): void {
+  try {
+    const payload: CachedAuthAccess = {
+      uid,
+      email,
+      access,
+      verifiedAt: Date.now(),
     };
+    localStorage.setItem(getAuthCacheKey(appId), JSON.stringify(payload));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function isOfflineOrUnavailable(err: unknown): boolean {
+  const code = (err as { code?: string })?.code ?? '';
+  const msg = ((err as { message?: string })?.message ?? '').toLowerCase();
+  return (
+    code === 'unavailable' ||
+    code === 'failed-precondition' ||
+    msg.includes('offline') ||
+    msg.includes('network') ||
+    msg.includes('unavailable')
+  );
+}
+
+async function resolveUserAccessFromServer(
+  db: Firestore,
+  appId: string,
+  email: string,
+): Promise<AccessStatus> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new Error('offline');
   }
 
   const isRoot = email === ROOT_ADMIN_EMAIL;
-
   let isGlobalAdmin = isRoot;
   let inGlobal = isRoot;
 
   try {
-    const globalSnap = await getDoc(doc(db, 'hub_global_whitelist', email));
+    const globalSnap = await getDocFromServer(doc(db, 'hub_global_whitelist', email));
     if (globalSnap.exists()) {
       inGlobal = true;
       const data = globalSnap.data() as Partial<WhitelistEntry>;
@@ -79,15 +148,17 @@ export async function resolveUserAccess(
         isGlobalAdmin = true;
       }
     }
-  } catch {
-    // Ignore if rules/offline prevent read
+  } catch (err) {
+    if (isOfflineOrUnavailable(err)) throw err;
+    // Ignore permission-denied if user is not in global whitelist
   }
 
   let appConfigured = false;
   try {
-    const appSnap = await getDoc(doc(db, 'hub_apps', appId));
+    const appSnap = await getDocFromServer(doc(db, 'hub_apps', appId));
     appConfigured = appSnap.exists();
-  } catch {
+  } catch (err) {
+    if (isOfflineOrUnavailable(err)) throw err;
     appConfigured = false;
   }
 
@@ -95,7 +166,7 @@ export async function resolveUserAccess(
   let inApp = isGlobalAdmin;
 
   try {
-    const memberSnap = await getDoc(doc(db, 'hub_apps', appId, 'members', email));
+    const memberSnap = await getDocFromServer(doc(db, 'hub_apps', appId, 'members', email));
     if (memberSnap.exists()) {
       inApp = true;
       const data = memberSnap.data() as Partial<WhitelistEntry>;
@@ -103,12 +174,30 @@ export async function resolveUserAccess(
         isAppAdmin = true;
       }
     }
-  } catch {
-    // Not a member or offline
+  } catch (err) {
+    if (isOfflineOrUnavailable(err)) throw err;
+    // Not a member or permission-denied
   }
 
   const isAdmin = isGlobalAdmin || isAppAdmin;
-  const hasAppAccess = isAdmin || (appConfigured ? inApp : inGlobal || INITIAL_GLOBAL_WHITELIST.some((u) => u.email === email));
+
+  // Never fall back to INITIAL_GLOBAL_WHITELIST when online if hub_global_whitelist/quentin.vaslin@gmail.com exists
+  let globalSeeded = true;
+  if (!appConfigured && !inGlobal && !isAdmin) {
+    try {
+      const rootSnap = await getDocFromServer(doc(db, 'hub_global_whitelist', ROOT_ADMIN_EMAIL));
+      globalSeeded = rootSnap.exists();
+    } catch (err) {
+      if (isOfflineOrUnavailable(err)) throw err;
+      globalSeeded = true;
+    }
+  }
+
+  const hasAppAccess =
+    isAdmin ||
+    (appConfigured
+      ? inApp
+      : inGlobal || (!globalSeeded && INITIAL_GLOBAL_WHITELIST.some((u) => u.email === email)));
 
   return {
     isGlobalAdmin,
@@ -118,6 +207,76 @@ export async function resolveUserAccess(
     appConfigured,
     role: isAdmin ? 'admin' : hasAppAccess ? 'user' : null,
   };
+}
+
+export async function resolveUserAccess(
+  db: Firestore | null | undefined,
+  appId: string,
+  userEmail: string | null | undefined,
+): Promise<AccessStatus> {
+  const email = userEmail ? normalizeEmail(userEmail) : '';
+  if (!db || !email) {
+    return { ...DENIED_ACCESS_STATUS };
+  }
+  try {
+    return await resolveUserAccessFromServer(db, appId, email);
+  } catch {
+    return { ...DENIED_ACCESS_STATUS };
+  }
+}
+
+export interface AccessResolutionResult {
+  access: AccessStatus;
+  fromOfflineCache: boolean;
+  offlineUnverified: boolean;
+}
+
+export async function resolveUserAccessWithCache(
+  db: Firestore | null | undefined,
+  appId: string,
+  uid: string | null | undefined,
+  userEmail: string | null | undefined,
+): Promise<AccessResolutionResult> {
+  const email = userEmail ? normalizeEmail(userEmail) : '';
+  if (!db || !uid || !email) {
+    return {
+      access: { ...DENIED_ACCESS_STATUS },
+      fromOfflineCache: false,
+      offlineUnverified: false,
+    };
+  }
+
+  try {
+    const access = await resolveUserAccessFromServer(db, appId, email);
+    if (access.hasAppAccess) {
+      writeAuthCache(appId, uid, email, access);
+    } else {
+      clearAuthAccessCache(appId);
+    }
+    return { access, fromOfflineCache: false, offlineUnverified: false };
+  } catch (err) {
+    if (
+      isOfflineOrUnavailable(err) ||
+      (typeof navigator !== 'undefined' && navigator.onLine === false) ||
+      (err as Error)?.message === 'offline'
+    ) {
+      const cached = readValidAuthCache(appId, uid, email);
+      if (cached) {
+        return { access: cached, fromOfflineCache: true, offlineUnverified: false };
+      }
+      return {
+        access: { ...DENIED_ACCESS_STATUS },
+        fromOfflineCache: false,
+        offlineUnverified: true,
+      };
+    }
+    clearAuthAccessCache(appId);
+    return {
+      access: { ...DENIED_ACCESS_STATUS },
+      fromOfflineCache: false,
+      offlineUnverified: false,
+    };
+  }
 }
 
 export async function seedInitialGlobalWhitelistIfEmpty(db: Firestore): Promise<boolean> {

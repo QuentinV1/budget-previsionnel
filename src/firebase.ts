@@ -78,7 +78,7 @@ export function formatSyncError(err: unknown): string {
     msg.includes('Missing or insufficient permissions') ||
     msg.includes('PERMISSION_DENIED')
   ) {
-    return 'Accès Firestore refusé (vérifiez que votre e-mail est bien vérifié et autorisé).';
+    return 'Accès Firestore refusé (vérifiez que votre compte est bien autorisé).';
   }
   return msg || 'Erreur de synchronisation Firestore';
 }

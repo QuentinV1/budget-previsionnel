@@ -22,9 +22,7 @@ import {
   formatSyncError,
   inscriptionEmail,
   isFirebaseConfigured,
-  rechargerUtilisateurFirebase,
   reinitialiserMotDePasse,
-  renvoyerEmailVerification,
 } from '../firebase';
 import { HouseholdDoc } from '../services/householdService';
 import { resolveUserAccess, type AccessStatus } from '../services/accessControl';
@@ -40,6 +38,7 @@ export interface CloudState {
 
 interface Props {
   open: boolean;
+  blocking?: boolean;
   onClose: () => void;
   user: User | null;
   cloudState: CloudState;
@@ -49,7 +48,6 @@ interface Props {
   lockedHousehold: HouseholdDoc | null;
   pendingInvite?: boolean;
   onForceSync: () => Promise<void>;
-  onEmailVerified: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onOpenHouseholdModal: () => void;
   onOpenOnboardingModal: () => void;
@@ -81,6 +79,7 @@ function mapAuthError(err: unknown): string {
 
 export function AuthGate({
   open,
+  blocking = false,
   onClose,
   user,
   cloudState,
@@ -90,7 +89,6 @@ export function AuthGate({
   lockedHousehold,
   pendingInvite,
   onForceSync,
-  onEmailVerified,
   onSignOut,
   onOpenHouseholdModal,
   onOpenOnboardingModal,
@@ -102,16 +100,13 @@ export function AuthGate({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
-  const [verifMsg, setVerifMsg] = useState(
-    'Vérifiez votre boîte mail (et vos spams), puis cliquez sur « J’ai vérifié » (ou utilisez « Continuer avec Google »).'
-  );
   const [syncLocalErr, setSyncLocalErr] = useState('');
   const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
   const [activeTab, setActiveTab] = useState<'account' | 'access'>('account');
 
   useEffect(() => {
     let cancelled = false;
-    if (!open || !user || !user.emailVerified || !db || !user.email) {
+    if (!open || !user || !db || !user.email) {
       setAccessStatus(null);
       setActiveTab('account');
       return;
@@ -129,19 +124,20 @@ export function AuthGate({
     return () => {
       cancelled = true;
     };
-  }, [open, user?.uid, user?.emailVerified, user?.email]);
+  }, [open, user?.uid, user?.email]);
 
   useEffect(() => {
     if (!open) return;
     setError('');
     setInfo('');
     setSyncLocalErr('');
+    if (blocking) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, blocking, onClose]);
 
-  if (!open) return null;
+  if (!open && !blocking) return null;
 
   const soumettreAuthEmail = async (isRegister: boolean, e?: FormEvent) => {
     if (e) e.preventDefault();
@@ -154,20 +150,11 @@ export function AuthGate({
     setBusy(true);
     try {
       if (isRegister) {
-        const created = await inscriptionEmail(email, password, name);
-        if (!created.emailVerified) {
-          setVerifMsg(
-            'Un e-mail de vérification vient d’être envoyé. Cliquez sur le lien reçu puis sur « J’ai vérifié ».'
-          );
-        } else {
-          onClose();
-        }
+        await inscriptionEmail(email, password, name);
       } else {
-        const logged = await connexionEmail(email, password);
-        if (logged.emailVerified) {
-          onClose();
-        }
+        await connexionEmail(email, password);
       }
+      if (!blocking) onClose();
     } catch (err: unknown) {
       setError(mapAuthError(err));
     } finally {
@@ -207,39 +194,6 @@ export function AuthGate({
     }
   };
 
-  const handleResendVerif = async () => {
-    setBusy(true);
-    try {
-      const sent = await renvoyerEmailVerification();
-      setVerifMsg(
-        sent
-          ? 'E-mail de vérification envoyé ! Vérifiez votre boîte de réception (et les spams), puis cliquez sur « J’ai vérifié ».'
-          : 'Votre adresse est déjà vérifiée.'
-      );
-    } catch (err: unknown) {
-      setVerifMsg(mapAuthError(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleCheckVerif = async () => {
-    setBusy(true);
-    try {
-      const reloaded = await rechargerUtilisateurFirebase();
-      if (reloaded?.emailVerified) {
-        await reloaded.getIdToken(true);
-        await onEmailVerified();
-      } else {
-        setVerifMsg('Adresse toujours non vérifiée. Cliquez d’abord sur le lien reçu par e-mail.');
-      }
-    } catch (err: unknown) {
-      setVerifMsg(mapAuthError(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleForceSync = async () => {
     setSyncLocalErr('');
     setBusy(true);
@@ -274,45 +228,53 @@ export function AuthGate({
   return (
     <div
       id="modal-auth"
-      className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 backdrop-blur-[2px] sm:items-center sm:p-4"
-      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+      className={
+        blocking
+          ? 'fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-b from-slate-100 to-slate-200 p-4'
+          : 'fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 backdrop-blur-[2px] sm:items-center sm:p-4'
+      }
+      onMouseDown={(e) => !blocking && e.target === e.currentTarget && onClose()}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Compte Cloud Budget Prévisionnel"
-        className={`flex max-h-[90dvh] w-full flex-col rounded-t-2xl bg-white pb-[env(safe-area-inset-bottom)] shadow-xl sm:rounded-2xl sm:pb-0 ${
+        className={`flex max-h-[90dvh] w-full flex-col bg-white shadow-xl sm:rounded-2xl sm:pb-0 ${
+          blocking ? 'rounded-2xl' : 'rounded-t-2xl pb-[env(safe-area-inset-bottom)]'
+        } ${
           user && accessStatus?.isAdmin && activeTab === 'access' ? 'sm:max-w-xl' : 'sm:max-w-md'
         }`}
       >
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
           <div className="flex items-center gap-2 font-semibold text-slate-900">
             <Cloud className="h-5 w-5 text-indigo-600" />
-            <span>Compte Cloud Budget</span>
+            <span>Budget Prévisionnel — Connexion</span>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-            aria-label="Fermer"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {!blocking && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              aria-label="Fermer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
 
         <div className="overflow-y-auto px-5 py-4">
           {!configured ? (
             <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900">
-              <p className="font-semibold">Mode hors-ligne / local uniquement</p>
+              <p className="font-semibold">Authentification indisponible</p>
               <p>
-                Firebase Cloud n’est pas disponible dans cet environnement. Vos données restent enregistrées localement dans votre navigateur.
+                Firebase Cloud n’est pas disponible dans cet environnement.
               </p>
             </div>
           ) : !user ? (
             /* Formulaire de connexion (affiché si déconnecté) */
             <div id="auth-logged-out-panel" className="space-y-3.5">
               <p className="text-xs text-slate-500">
-                L’application fonctionne en local sans compte. Connectez-vous pour chiffrer (AES-256) et synchroniser votre budget entre vos appareils ou le partager avec votre foyer.
+                Connectez-vous ou créez un compte pour accéder à votre budget chiffré (AES-256) et synchronisé avec votre foyer.
               </p>
 
               {pendingInvite && (
@@ -551,39 +513,7 @@ export function AuthGate({
                     </div>
                   )}
 
-                  {!user.emailVerified && (
-                    <div
-                      id="auth-unverified-box"
-                      className="space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-950"
-                    >
-                      <div className="font-bold text-amber-800">Adresse e-mail non vérifiée</div>
-                      <div id="auth-unverified-msg" className="text-amber-900/80">
-                        {verifMsg}
-                      </div>
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        <button
-                          type="button"
-                          id="btn-resend-verif"
-                          disabled={busy}
-                          onClick={handleResendVerif}
-                          className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
-                        >
-                          Renvoyer l’e-mail de vérification
-                        </button>
-                        <button
-                          type="button"
-                          id="btn-check-verif"
-                          disabled={busy}
-                          onClick={handleCheckVerif}
-                          className="rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-800 disabled:opacity-50"
-                        >
-                          J’ai vérifié
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {user.emailVerified && lockedHousehold && (
+                  {lockedHousehold && (
                     <div className="space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-950">
                       <div className="flex items-center gap-1.5 font-bold text-amber-900">
                         <Lock className="h-3.5 w-3.5" />
@@ -606,7 +536,7 @@ export function AuthGate({
                     </div>
                   )}
 
-                  {user.emailVerified && activeHousehold && !lockedHousehold && (
+                  {activeHousehold && !lockedHousehold && (
                     <div className="flex items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 text-xs">
                       <div className="min-w-0">
                         <div className="font-bold text-indigo-950 truncate">

@@ -9,15 +9,18 @@ import {
   LayoutDashboard,
   Lightbulb,
   Lock,
+  LogOut,
   PiggyBank,
   Plus,
   RefreshCw,
   Settings,
+  ShieldAlert,
   SlidersHorizontal,
   Undo2,
   User,
   Users,
   Wallet,
+  WifiOff,
 } from 'lucide-react';
 import { AuthGate, CloudState } from './components/AuthGate';
 import { HouseholdModal } from './components/HouseholdModal';
@@ -30,10 +33,16 @@ import { TipsPage } from './components/TipsPage';
 import { TrackingPage } from './components/TrackingPage';
 import {
   auth,
+  db,
   deconnexionFirebase,
   formatSyncError,
   isFirebaseConfigured,
 } from './firebase';
+import {
+  clearAuthAccessCache,
+  resolveUserAccessWithCache,
+  type AccessStatus,
+} from './services/accessControl';
 import {
   HouseholdDoc,
   createHousehold,
@@ -56,6 +65,7 @@ import { clearLocalState, exportCsv, hasLocalState, loadState, saveState } from 
 import { computeTips } from './utils/tips';
 
 export const CURRENT_APP_VERSION = '1.1.0';
+const APP_ID = 'budget-previsionnel';
 const LAST_UID_KEY = 'budget_foyer_last_uid';
 
 const INITIAL_CLOUD_STATE: CloudState = {
@@ -94,6 +104,9 @@ export function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const userRef = useRef<FirebaseUser | null>(null);
   userRef.current = user;
+  const [authLoading, setAuthLoading] = useState<boolean>(firebaseEnabled);
+  const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
+  const [offlineUnverified, setOfflineUnverified] = useState<boolean>(false);
 
   const [cloudState, setCloudState] = useState<CloudState>(INITIAL_CLOUD_STATE);
   const cloudStateRef = useRef<CloudState>(cloudState);
@@ -251,15 +264,6 @@ export function App() {
 
       reinitialiserEtatCloud();
       updateCloudState({ syncStatus: 'syncing', syncError: null });
-
-      if (!targetUser.emailVerified) {
-        updateCloudState({
-          syncStatus: 'error',
-          syncError:
-            'Accès Firestore refusé (vérifiez que votre e-mail est bien vérifié et autorisé).',
-        });
-        return;
-      }
 
       upsertUserProfile(targetUser).catch(() => {});
 
@@ -434,11 +438,6 @@ export function App() {
   const forcerSyncCloud = useCallback(async () => {
     const currentUser = userRef.current;
     if (!currentUser) throw new Error('Non connecté au Cloud.');
-    if (!currentUser.emailVerified) {
-      throw new Error(
-        'Accès Firestore refusé (vérifiez que votre e-mail est bien vérifié et autorisé).'
-      );
-    }
 
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     updateCloudState({ syncStatus: 'syncing', syncError: null });
@@ -487,16 +486,46 @@ export function App() {
     }
   }, [updateCloudState]);
 
-  // Écoute Firebase Auth (non bloquante)
+  const verifyAndSyncUser = useCallback(
+    async (u: FirebaseUser) => {
+      const result = await resolveUserAccessWithCache(db, APP_ID, u.uid, u.email);
+      setAccessStatus(result.access);
+      setOfflineUnverified(result.offlineUnverified);
+      if (result.access.hasAppAccess) {
+        if (!unsubHouseholdsRef.current) {
+          await activerSyncCloud(u);
+        }
+      } else {
+        arreterListenersFirestore();
+        reinitialiserEtatCloud();
+      }
+    },
+    [activerSyncCloud, arreterListenersFirestore, reinitialiserEtatCloud]
+  );
+
+  // Écoute Firebase Auth + Whitelist Access Gate
   useEffect(() => {
-    if (!firebaseEnabled || !auth) return;
+    if (!firebaseEnabled || !auth) {
+      setAuthLoading(false);
+      return;
+    }
+    let active = true;
     const unsub = onAuthStateChanged(auth, async (u) => {
+      if (!active) return;
       const wasSignedIn = userRef.current !== null;
       setUser(u);
       userRef.current = u;
       if (u) {
-        await activerSyncCloud(u);
+        setAuthLoading(true);
+        try {
+          await verifyAndSyncUser(u);
+        } finally {
+          if (active) setAuthLoading(false);
+        }
       } else {
+        clearAuthAccessCache(APP_ID);
+        setAccessStatus(null);
+        setOfflineUnverified(false);
         arreterListenersFirestore();
         reinitialiserEtatCloud();
         setHouseholds([]);
@@ -514,13 +543,37 @@ export function App() {
           stateRef.current = freshState;
           suppressCloudSyncRef.current = false;
         }
+        setAuthLoading(false);
       }
     });
     return () => {
+      active = false;
       unsub();
       arreterListenersFirestore();
     };
-  }, [activerSyncCloud, arreterListenersFirestore, firebaseEnabled, reinitialiserEtatCloud]);
+  }, [arreterListenersFirestore, firebaseEnabled, reinitialiserEtatCloud, verifyAndSyncUser]);
+
+  // Revalidation automatique lors du retour en ligne
+  useEffect(() => {
+    if (!user) return;
+    const handleOnline = () => {
+      verifyAndSyncUser(user).catch(() => {});
+    };
+    window.addEventListener('online', handleOnline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [user, verifyAndSyncUser]);
+
+  const handleRecheckAccess = async () => {
+    if (!user) return;
+    setAuthLoading(true);
+    try {
+      await verifyAndSyncUser(user);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
 
   // Si un lien d'invitation est présent dans l'URL au démarrage et que l'utilisateur n'est pas connecté, ouvrir la modale Cloud (non bloquante)
   useEffect(() => {
@@ -571,6 +624,7 @@ export function App() {
     setSettingsOpen(false);
     setUndoToast(null);
     setActiveTab('synthese');
+    clearAuthAccessCache(APP_ID);
     clearLocalState();
     clearAllCachedKeys(uid);
     localStorage.removeItem(LAST_UID_KEY);
@@ -579,6 +633,8 @@ export function App() {
     setState(freshState);
     stateRef.current = freshState;
     suppressCloudSyncRef.current = false;
+    setAccessStatus(null);
+    setOfflineUnverified(false);
     await deconnexionFirebase();
   };
 
@@ -717,6 +773,120 @@ export function App() {
   const userShortLabel = user
     ? (user.email || user.displayName || 'Cloud').split('@')[0]
     : 'Connexion';
+
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-slate-50 p-6 text-slate-600">
+        <div className="h-8 w-8 animate-spin rounded-full border-3 border-slate-200 border-t-slate-900" />
+        <p className="text-sm font-medium">Vérification de l&apos;accès…</p>
+      </div>
+    );
+  }
+
+  if (!firebaseEnabled) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
+        <div className="w-full max-w-sm space-y-3 rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+          <ShieldAlert className="mx-auto h-10 w-10 text-amber-500" />
+          <h1 className="text-lg font-bold text-slate-900">Authentification indisponible</h1>
+          <p className="text-sm text-slate-600">
+            Le service d&apos;authentification Firebase n&apos;est pas disponible dans cet environnement.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <AuthGate
+        open={true}
+        blocking={true}
+        onClose={() => {}}
+        user={null}
+        cloudState={cloudState}
+        sheetsCount={state.sheets.length}
+        linesCount={state.lines.length}
+        activeHousehold={null}
+        lockedHousehold={null}
+        pendingInvite={Boolean(pendingInvite.inviteId && pendingInvite.inviteKey)}
+        onForceSync={forcerSyncCloud}
+        onSignOut={handleSignOut}
+        onOpenHouseholdModal={() => {}}
+        onOpenOnboardingModal={() => {}}
+      />
+    );
+  }
+
+  if (offlineUnverified) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
+        <div className="w-full max-w-sm space-y-4 rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+            <WifiOff className="h-6 w-6" />
+          </div>
+          <div className="space-y-1.5">
+            <h1 className="text-lg font-bold text-slate-900">Connexion requise</h1>
+            <p className="text-sm text-slate-600">
+              Une première vérification en ligne est nécessaire pour confirmer votre autorisation d&apos;accès sur cet appareil.
+            </p>
+            {user.email && (
+              <p className="pt-1 text-xs font-medium break-all text-slate-500">{user.email}</p>
+            )}
+          </div>
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={handleRecheckAccess}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white hover:bg-slate-800"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Réessayer
+            </button>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              <LogOut className="h-4 w-4" />
+              Se déconnecter / Changer de compte
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!accessStatus?.hasAppAccess) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
+        <div className="w-full max-w-sm space-y-4 rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-100 text-rose-600">
+            <ShieldAlert className="h-6 w-6" />
+          </div>
+          <div className="space-y-1.5">
+            <h1 className="text-lg font-bold text-slate-900">Accès non autorisé</h1>
+            <p className="text-sm text-slate-600">
+              Ce compte n&apos;est pas autorisé à accéder à Budget Prévisionnel. Contactez un administrateur pour demander l&apos;accès.
+            </p>
+            {user.email && (
+              <p className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold break-all text-slate-800">
+                {user.email}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+          >
+            <LogOut className="h-4 w-4" />
+            Se déconnecter / Changer de compte
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -978,9 +1148,6 @@ export function App() {
         lockedHousehold={lockedHousehold}
         pendingInvite={Boolean(pendingInvite.inviteId && pendingInvite.inviteKey)}
         onForceSync={forcerSyncCloud}
-        onEmailVerified={async () => {
-          await activerSyncCloud(userRef.current);
-        }}
         onSignOut={handleSignOut}
         onOpenHouseholdModal={() => setHouseholdModalOpen(true)}
         onOpenOnboardingModal={() => setShowOnboardingModal(true)}
